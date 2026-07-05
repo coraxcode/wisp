@@ -1796,8 +1796,19 @@ footer {
       el.theirText.value = '';
       el.roomLink.value = '';
       state.linkValue = '';
+
+      // Extra privacy cleanup: remove anything sensitive still visible in inputs.
+      el.pasteLink.value = '';
+      el.passwordInput.value = '';
+      el.roomPassInput.value = '';
+
       el.safetyCode.textContent = '';
       el.safetyBar.classList.add('hidden');
+
+      // Extra privacy cleanup: remove #r=..., #k=..., #t=..., #offer=... or #answer=...
+      // from the visible browser address bar, if any is still there.
+      cleanAddressBar();
+
       state.localClosing = false;
       setStatus('offline', 'idle');
       if (!silent) { showView('viewStart'); log('session ended. nothing was stored in this tab.', 'warn'); }
