@@ -1,0 +1,10 @@
+{
+  "tasks": {
+    "start": "deno run --allow-net --allow-read --unstable-kv main.ts",
+    "check": "deno check --unstable-kv main.ts"
+  },
+  "deploy": {
+    "project": "wisp-deno",
+    "entrypoint": "main.ts"
+  }
+}

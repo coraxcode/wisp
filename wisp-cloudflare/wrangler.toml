@@ -1,0 +1,15 @@
+name = "wisp-cloudflare"
+main = "worker.js"
+compatibility_date = "2026-07-05"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[[durable_objects.bindings]]
+name = "WISP_ROOMS"
+class_name = "WispRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WispRoom"]

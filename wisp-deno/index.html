@@ -1,0 +1,2004 @@
+<!doctype html>
+<!--
+  Wisp — private live chat
+  Copyright (C) 2026 Raphael Ciribelly. All rights reserved.
+  Released under the GNU AGPLv3-or-later license.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>wisp — private live chat</title>
+  <style>
+    /* ============================================================
+   WISP — hacker-terminal theme
+   Golden-ratio system: φ = 1.618
+   Type scale: .618 / .786 / 1 / 1.272 / 1.618 rem  (φ and √φ steps)
+   Space scale: .382 / .618 / 1 / 1.618 / 2.618 / 4.236 rem
+   Drop-in replacement: paste this INSIDE the <style> tag,
+   replacing all existing CSS. All selectors used by the JS
+   are preserved (.hidden, .dot.*, .log.*, etc.)
+   ============================================================ */
+
+:root {
+  /* — golden ratio scales — */
+  --phi: 1.618;
+  --s0: .382rem;
+  --s1: .618rem;
+  --s2: 1rem;
+  --s3: 1.618rem;
+  --s4: 2.618rem;
+  --s5: 4.236rem;
+  --fs-xs: .618rem;
+  --fs-sm: .786rem;
+  --fs-md: 1rem;
+  --fs-lg: 1.272rem;
+  --fs-xl: 1.618rem;
+
+  /* — phosphor palette — */
+  --bg: #050807;
+  --bg-glow: #071009;
+  --panel: rgba(13, 20, 15, .82);
+  --panel-2: rgba(18, 27, 20, .9);
+  --line: #1d2f22;
+  --line-soft: #14211a;
+  --text: #d4f7dd;
+  --muted: #6fa07d;
+  --dim: #3d5c48;
+  --accent: #34ff88;
+  --accent-soft: #7dffb4;
+  --accent-dim: rgba(52, 255, 136, .13);
+  --accent-glow: rgba(52, 255, 136, .38);
+  --warn: #ffd35c;
+  --bad: #ff6a5e;
+
+  --radius: 6px;
+  --radius-sm: 4px;
+  --mono: ui-monospace, "JetBrains Mono", "Fira Code", "SF Mono",
+          SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+/* ------------------------------------------------------------
+   CANVAS — phosphor grid + vignette + scanlines
+   ------------------------------------------------------------ */
+html, body {
+  margin: 0;
+  min-height: 100%;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 16px;               /* 16px base: prevents iOS auto-zoom */
+  line-height: var(--phi);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background:
+    radial-gradient(ellipse 120% 80% at 50% -10%, var(--bg-glow) 0%, var(--bg) 62%),
+    var(--bg);
+  background-attachment: fixed;
+  padding: clamp(var(--s2), 4vw, var(--s4));
+  padding-left:  max(clamp(var(--s2), 4vw, var(--s4)), env(safe-area-inset-left));
+  padding-right: max(clamp(var(--s2), 4vw, var(--s4)), env(safe-area-inset-right));
+  padding-bottom: max(clamp(var(--s2), 4vw, var(--s4)), env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: center;
+  position: relative;
+}
+
+/* faint terminal grid */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(52, 255, 136, .028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(52, 255, 136, .028) 1px, transparent 1px);
+  background-size: 2.618rem 2.618rem;   /* φ² grid */
+  mask-image: radial-gradient(ellipse 100% 90% at 50% 0%, #000 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse 100% 90% at 50% 0%, #000 30%, transparent 80%);
+}
+
+/* CRT scanlines */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0 2px,
+    rgba(0, 0, 0, .10) 2px 3px
+  );
+  opacity: .5;
+}
+
+::selection { background: var(--accent); color: #041008; }
+
+.app {
+  position: relative;
+  z-index: 1;
+  width: min(760px, 100%);
+  display: grid;
+  gap: var(--s3);
+  align-content: start;
+}
+
+/* ------------------------------------------------------------
+   HEADER
+   ------------------------------------------------------------ */
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s2);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.brand {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: var(--accent);
+  text-shadow: 0 0 12px var(--accent-glow), 0 0 34px rgba(52, 255, 136, .18);
+  user-select: none;
+}
+.brand .slash { color: var(--dim); font-weight: 400; text-shadow: none; }
+.brand .cursor {
+  display: inline-block;
+  width: .55em;
+  height: 1em;
+  margin-left: .15em;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+  vertical-align: text-bottom;
+  animation: blink 1.2s steps(1) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  white-space: nowrap;
+  text-transform: lowercase;
+  letter-spacing: .06em;
+}
+
+.dot {
+  width: .5rem;
+  height: .5rem;
+  flex: none;
+  border-radius: 50%;
+  background: var(--dim);
+  transition: background 200ms ease, box-shadow 200ms ease;
+}
+.dot.busy {
+  background: var(--warn);
+  box-shadow: 0 0 0 4px rgba(255, 211, 92, .12), 0 0 10px rgba(255, 211, 92, .5);
+  animation: pulse 1.618s ease-in-out infinite;
+}
+.dot.on {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-dim), 0 0 12px var(--accent-glow);
+}
+.dot.off {
+  background: var(--bad);
+  box-shadow: 0 0 0 4px rgba(255, 106, 94, .12), 0 0 10px rgba(255, 106, 94, .45);
+}
+@keyframes pulse { 50% { opacity: .45; } }
+
+/* ------------------------------------------------------------
+   LOG LINE
+   ------------------------------------------------------------ */
+.log {
+  min-height: 1.618rem;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  letter-spacing: .01em;
+}
+.log::before { content: "> "; color: var(--accent); text-shadow: 0 0 8px var(--accent-glow); }
+.log.ok   { color: var(--accent-soft); }
+.log.warn { color: var(--warn); }
+.log.bad  { color: var(--bad); }
+
+/* ------------------------------------------------------------
+   CARDS
+   ------------------------------------------------------------ */
+.card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  padding: var(--s3);
+  display: grid;
+  gap: var(--s2);
+  box-shadow:
+    0 0 0 1px rgba(52, 255, 136, .04),
+    0 1rem 2.618rem rgba(0, 0, 0, .55),
+    inset 0 1px 0 rgba(212, 247, 221, .04);
+  position: relative;
+  overflow: hidden;
+}
+/* top phosphor hairline */
+.card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent-glow) 38.2%, var(--accent-glow) 61.8%, transparent);
+  opacity: .6;
+  pointer-events: none;
+}
+
+.hidden { display: none !important; }
+
+.step-label {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: .3em;
+  text-transform: uppercase;
+  color: var(--accent);
+  opacity: .8;
+}
+.step-label::before { content: "[ "; color: var(--dim); }
+.step-label::after  { content: " ]"; color: var(--dim); }
+
+.lead { margin: 0; color: var(--muted); font-size: var(--fs-sm); }
+.lead strong { color: var(--text); font-weight: 700; }
+
+/* ------------------------------------------------------------
+   INPUTS
+   ------------------------------------------------------------ */
+textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(4, 8, 6, .85);
+  color: var(--text);
+  padding: var(--s1) var(--s2);
+  font: inherit;
+  font-size: 16px;               /* ≥16px so iOS never zooms on focus */
+  line-height: var(--phi);
+  outline: none;
+  resize: vertical;
+  min-height: 4.236rem;          /* φ³ */
+  caret-color: var(--accent);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+textarea::placeholder { color: var(--dim); }
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim), 0 0 18px rgba(52, 255, 136, .1);
+}
+textarea[readonly] { color: var(--muted); cursor: copy; }
+
+/* ------------------------------------------------------------
+   BUTTONS
+   ------------------------------------------------------------ */
+.row { display: flex; gap: var(--s1); flex-wrap: wrap; align-items: center; }
+
+button {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: var(--s1) var(--s3);   /* .618 × 1.618 — golden rectangle */
+  min-height: 2.618rem;
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  letter-spacing: .04em;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 130ms ease, background 130ms ease,
+              color 130ms ease, transform 130ms ease, box-shadow 130ms ease;
+}
+button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 14px rgba(52, 255, 136, .14), inset 0 0 8px rgba(52, 255, 136, .05);
+}
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:active { transform: translateY(1px); }
+button:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #04130a;
+  text-shadow: none;
+  box-shadow: 0 0 20px rgba(52, 255, 136, .3);
+}
+button.primary:hover {
+  background: var(--accent-soft);
+  color: #04130a;
+  box-shadow: 0 0 28px rgba(52, 255, 136, .45);
+}
+
+button.ghost { background: transparent; border-color: transparent; color: var(--muted); box-shadow: none; }
+button.ghost:hover { color: var(--bad); border-color: transparent; box-shadow: none; }
+
+/* ------------------------------------------------------------
+   DETAILS / CHECKBOX
+   ------------------------------------------------------------ */
+details { border-top: 1px solid var(--line-soft); padding-top: var(--s2); }
+summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  color: var(--dim);
+  user-select: none;
+  list-style: none;
+  transition: color 130ms ease;
+}
+summary:hover { color: var(--muted); }
+summary::before { content: "+ "; color: var(--accent); }
+details[open] summary::before { content: "- "; }
+summary::-webkit-details-marker { display: none; }
+
+.check {
+  display: flex;
+  gap: var(--s1);
+  align-items: flex-start;
+  margin-top: var(--s2);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.check input { accent-color: var(--accent); margin-top: .2rem; width: 1rem; height: 1rem; }
+
+/* ------------------------------------------------------------
+   CHAT — the two live panes
+   ------------------------------------------------------------ */
+.chat { gap: var(--s3); }
+
+.chat-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.chat-head .head-info {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+}
+.chat-head .peer {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+#lifetimeText {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .01em;
+}
+
+.panes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s3);
+}
+
+.pane { display: grid; gap: var(--s1); align-content: start; min-width: 0; }
+
+.pane-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s1);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: .3em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.pane-label .tag {
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 400;
+  text-align: right;
+}
+
+.pane textarea {
+  min-height: 14.562rem;   /* φ⁵ + φ³ ≈ golden column */
+  font-size: 16px;
+  line-height: var(--phi);
+}
+
+/* yours: hot phosphor */
+#myText {
+  border-color: rgba(52, 255, 136, .4);
+  box-shadow: inset 0 0 24px rgba(52, 255, 136, .04);
+}
+#myText:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim), inset 0 0 24px rgba(52, 255, 136, .06);
+}
+
+/* theirs: cool receive-only pane */
+#theirText {
+  background: var(--panel-2);
+  color: var(--accent-soft);
+  cursor: default;
+  text-shadow: 0 0 8px rgba(52, 255, 136, .25);
+}
+#theirText:focus { border-color: var(--line); box-shadow: none; }
+
+.pane .hint { font-size: var(--fs-xs); color: var(--dim); margin: 0; line-height: var(--phi); }
+
+/* ------------------------------------------------------------
+   FOOTER
+   ------------------------------------------------------------ */
+footer {
+  font-size: var(--fs-xs);
+  color: var(--dim);
+  line-height: var(--phi);
+  padding-top: var(--s1);
+  border-top: 1px solid var(--line-soft);
+}
+
+/* ------------------------------------------------------------
+   SCROLLBARS (desktop)
+   ------------------------------------------------------------ */
+* { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+
+/* ------------------------------------------------------------
+   RESPONSIVE — mobile
+   ------------------------------------------------------------ */
+@media (max-width: 700px) {
+  body { padding: var(--s2);
+         padding-bottom: max(var(--s2), env(safe-area-inset-bottom)); }
+  .app { gap: var(--s2); }
+  .card { padding: var(--s2); }
+  .panes { grid-template-columns: 1fr; gap: var(--s2); }
+  .pane textarea { min-height: 9rem; }
+  button { min-height: 44px; flex: 1 1 auto; }   /* full-width tap targets */
+  button.ghost { flex: 0 0 auto; }
+  .chat-head { flex-direction: column; align-items: stretch; }
+  .chat-head .row { justify-content: flex-end; }
+  .brand { font-size: var(--fs-md); }
+  body::before { background-size: 1.618rem 1.618rem; }
+}
+
+@media (max-width: 380px) {
+  .status { font-size: var(--fs-xs); }
+  .pane-label { flex-direction: column; align-items: flex-start; gap: .1rem; letter-spacing: .2em; }
+  .pane-label .tag { text-align: left; }
+}
+
+/* ------------------------------------------------------------
+   ACCESSIBILITY / MOTION
+   ------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  .brand .cursor { animation: none; }
+  .dot.busy { animation: none; }
+  * { transition: none !important; animation-duration: .01ms !important; }
+}
+
+@media (hover: none) {
+  button:hover { border-color: var(--line); color: var(--text); box-shadow: none; }
+  button.primary:hover { background: var(--accent); box-shadow: 0 0 20px rgba(52, 255, 136, .3); }
+}
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div class="brand">wisp<span class="slash">://</span><span class="cursor" aria-hidden="true"></span></div>
+      <div class="status" aria-live="polite"><span id="statusDot" class="dot"></span><span id="statusText">offline</span></div>
+    </header>
+
+    <p id="log" class="log" aria-live="polite">ready. create a private room and send one link.</p>
+
+    <section id="viewStart" class="card">
+      <span class="step-label">start</span>
+      <p class="lead"><strong>Start a private chat.</strong> Wisp creates a short room, stores only encrypted setup data for a few minutes, then connects the two browsers with WebRTC.</p>
+      <label class="check">
+        <input id="usePassword" type="checkbox" />
+        <span><strong style="color: var(--text)">Protect with a password.</strong> The other person will need it to enter. The password never leaves the two browsers.</span>
+      </label>
+      <input id="passwordInput" class="hidden" type="password" maxlength="8" placeholder="password: 4 to 8 letters or numbers" autocomplete="off"
+  style="width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); padding: .618rem 1rem; font: inherit; outline: none;" />
+
+    <label class="check">
+      <input id="useSafety" type="checkbox" checked />
+      <span>
+        <strong style="color: var(--text)">Safety code.</strong>
+        After connecting, both screens show the same 8-character code. Compare it with the other person to confirm you are on the same secure connection.
+      </span>
+    </label>
+
+    <label class="check">
+      <input id="useManualPairing" type="checkbox" />
+      <span>
+        <strong style="color: var(--text)">Manual pairing — do not use Code.gs.</strong>
+        No encrypted setup data is sent to Apps Script. You will send an invite link, receive a reply link, and paste it back manually.
+      </span>
+    </label>
+      <label class="check" style="align-items: center;">
+      <span style="flex: 1;">
+        <strong style="color: var(--text)">Erase text after</strong> — how long typed text stays before self-erasing on both screens.
+      </span>
+      <select id="eraseSelect" style="border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); padding: .4rem .6rem; font: inherit;">
+      <option value="0">Never auto-erase</option>
+      <option value="1">1 second</option>
+      <option value="2">2 seconds</option>
+      <option value="3" selected>3 seconds</option>
+      <option value="4">4 seconds</option>
+      <option value="5">5 seconds</option>
+      <option value="6">6 seconds</option>
+      <option value="7">7 seconds</option>
+      <option value="8">8 seconds</option>
+      <option value="9">9 seconds</option>
+      <option value="10">10 seconds</option>
+    </select>
+    </label>
+
+    <label class="check" style="align-items: center;">
+      <span style="flex: 1;">
+        <strong style="color: var(--text)">End after inactivity</strong> — closes after this much silence. Typing restarts this timer.
+      </span>
+      <select id="durationSelect" style="border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); padding: .4rem .6rem; font: inherit;">
+        <option value="5">5 minutes</option>
+        <option value="10" selected>10 minutes</option>
+        <option value="15">15 minutes</option>
+        <option value="20">20 minutes</option>
+        <option value="30">30 minutes</option>
+        <option value="35">35 minutes</option>
+        <option value="40">40 minutes</option>
+        <option value="45">45 minutes</option>
+        <option value="50">50 minutes</option>
+        <option value="55">55 minutes</option>
+        <option value="60">60 minutes (1 hour)</option>
+      </select>
+    </label>
+
+    <label class="check" style="align-items: center;">
+      <span style="flex: 1;">
+        <strong style="color: var(--text)">Maximum session lifetime</strong> — closes after this total time, even if both people keep typing.
+      </span>
+      <select id="lifetimeSelect" style="border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); padding: .4rem .6rem; font: inherit;">
+        <option value="0" selected>No maximum</option>
+        <option value="5">5 minutes</option>
+        <option value="10">10 minutes</option>
+        <option value="15">15 minutes</option>
+        <option value="20">20 minutes</option>
+        <option value="25">25 minutes</option>
+        <option value="30">30 minutes</option>
+        <option value="35">35 minutes</option>
+        <option value="40">40 minutes</option>
+        <option value="45">45 minutes</option>
+        <option value="50">50 minutes</option>
+        <option value="55">55 minutes</option>
+        <option value="60">60 minutes (1 hour)</option>
+      </select>
+    </label>
+      <div class="row"><button id="createBtn" class="primary" type="button">Create private room</button></div>
+      <details>
+        <summary>received a link that didn't open? / options</summary>
+        <p class="lead" style="margin-top: var(--s2)">If a room link didn't open automatically, paste the full link here.</p>
+        <textarea id="pasteLink" placeholder="paste a Wisp link here (#r=... or #offer=... or #answer=...)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="margin-top: var(--s1)"></textarea>
+        <label class="check">
+          <input id="useStun" type="checkbox" checked />
+          <span><strong style="color: var(--text)">Compatibility mode.</strong> Uses public STUN only for route discovery. Chat text does not pass through STUN or Apps Script.</span>
+        </label>
+      </details>
+    </section>
+
+    <section id="viewShare" class="card hidden">
+      <span class="step-label">send this link</span>
+      <p class="lead"><strong>Room ready.</strong> Send this single link to the other person. Keep this tab open while Wisp waits for them.</p>
+      <textarea id="roomLink" readonly spellcheck="false"></textarea>
+      <p id="linkHiddenNote" class="lead hidden"><strong style="color: var(--text)">Link copied. Keep this tab open.</strong> The link is hidden from the screen for privacy.</p>
+      <div class="row">
+        <button id="shareLinkBtn" class="primary" type="button">Share link</button>
+        <button id="copyLinkBtn" type="button">Copy link</button>
+        <button id="showLinkBtn" class="ghost hidden" type="button">Show link</button>
+        <button id="cancelBtn" class="ghost" type="button">Cancel</button>
+      </div>
+      <p class="lead"><strong>Waiting…</strong> When the other person opens the link, follow the instructions shown below.</p>
+
+    <div id="manualReplyBox" class="hidden" style="display: grid; gap: var(--s1);">
+      <span class="step-label">manual step 2</span>
+      <p class="lead">
+        The other person will send you a reply link. Paste it below to open the direct channel.
+      </p>
+      <textarea id="manualAnswerInput" placeholder="paste the reply link here (#answer=...)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+    </div>
+    </section>
+
+    <section id="viewJoin" class="card hidden">
+      <span class="step-label">joining room</span>
+      <p class="lead"><strong>Invite detected.</strong> Wisp is opening the encrypted room and preparing the secure direct channel.</p>
+      <div class="row"><button id="cancelBtn2" class="ghost" type="button">Cancel</button></div>
+    </section>
+    
+    <section id="viewManualAnswer" class="card hidden">
+      <span class="step-label">manual reply</span>
+      <p class="lead">
+        <strong>Invite received.</strong> Send this reply link back to the person who invited you. Keep this tab open.
+      </p>
+      <textarea id="manualAnswerText" readonly spellcheck="false"></textarea>
+      <div class="row">
+        <button id="copyManualAnswerBtn" class="primary" type="button">Copy reply</button>
+        <button id="cancelManualAnswerBtn" class="ghost" type="button">Cancel</button>
+      </div>
+    </section>
+
+    <section id="viewPass" class="card hidden">
+      <span class="step-label">password required</span>
+      <p class="lead"><strong>This room is protected.</strong> Type the password you received to open the encrypted room.</p>
+      <input id="roomPassInput" type="password" maxlength="8" placeholder="password: 4 to 8 letters or numbers" autocomplete="off"
+        style="width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); padding: .618rem 1rem; font: inherit; outline: none;" />
+      <div class="row">
+        <button id="roomPassBtn" class="primary" type="button">Enter room</button>
+        <button id="cancelBtn3" class="ghost" type="button">Cancel</button>
+      </div>
+    </section>
+
+    <section id="viewChat" class="card chat hidden">
+      <div class="chat-head">
+        <div class="head-info">
+          <div class="peer"><span class="dot on"></span> direct channel · encrypted (DTLS) · live typing</div>
+          <div id="lifetimeBar" class="peer hidden"><span id="lifetimeDot" class="dot on"></span> <span id="lifetimeText"></span></div>
+        </div>
+        <div class="row"><button id="panicBtn" type="button" title="Instantly wipes everything and returns to the start screen">Panic</button><button id="clearMineBtn" type="button">Clear mine</button><button id="endBtn" class="ghost" type="button">End</button></div>
+      </div>
+      <p id="safetyBar" class="lead hidden" style="border: 1px dashed var(--line); border-radius: 7px; padding: .618rem 1rem;">
+        <strong style="color: var(--text)">Safety code: <span id="safetyCode" style="letter-spacing: .12em;"></span></strong><br />
+        Ask the other person if they see the same safety code.
+      </p>
+      <div class="panes">
+        <div class="pane">
+          <span class="pane-label">you <span class="tag">seen live by the other side</span></span>
+          <textarea id="myText" maxlength="3000" placeholder="type here — every keystroke is sent live…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+          <p class="hint">your text follows the room's erase setting — on both screens.</p>
+        </div>
+        <div class="pane">
+          <span class="pane-label">them <span class="tag">appears as they type</span></span>
+          <textarea id="theirText" placeholder="their live text appears here…" readonly autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+          <p class="hint">chat text exists only in tab memory. Setup data is used only to connect both browsers.</p>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      Messages are not stored. For better anonymity, use a VPN + private/incognito window. Absolute anonymity is not guaranteed.
+    </footer>
+  </main>
+
+  <script>
+    'use strict';
+
+    const APP_ID = 'wisp-gas-cache-live-chat';
+    const VERSION = 1;
+    const WEB_APP_URL = '<?= webAppUrl ?>';
+    const ICE_WAIT_MS = 22000;
+    const POLL_MS = 1500;
+    const MAX_TEXT = 3000;
+    // These two are chosen by whoever creates the room, then shared with the other
+    // side inside the encrypted offer, so BOTH browsers always use the same values.
+    let CLEAR_DELAY_MS = 3000;              // 0 = never auto-erase; otherwise 1..10 seconds
+    let REMOTE_CLEAR_FALLBACK_MS = 4500;    // 0 = disabled; otherwise CLEAR_DELAY_MS + 1500
+    let IDLE_LIMIT_MS = 10 * 60 * 1000;     // room ends after N minutes of silence
+    const PANIC_ESC_WINDOW_MS = 1500;       // second Esc press must come within 1.5 seconds
+    const ROOM_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+    const $ = id => document.getElementById(id);
+    const el = {
+      statusDot: $('statusDot'), statusText: $('statusText'), log: $('log'),
+      viewStart: $('viewStart'), viewShare: $('viewShare'), viewJoin: $('viewJoin'), viewChat: $('viewChat'),
+      createBtn: $('createBtn'), useStun: $('useStun'), pasteLink: $('pasteLink'), roomLink: $('roomLink'), shareLinkBtn: $('shareLinkBtn'), copyLinkBtn: $('copyLinkBtn'),
+      linkHiddenNote: $('linkHiddenNote'), showLinkBtn: $('showLinkBtn'),
+      usePassword: $('usePassword'), passwordInput: $('passwordInput'), viewPass: $('viewPass'), roomPassInput: $('roomPassInput'), roomPassBtn: $('roomPassBtn'), cancelBtn3: $('cancelBtn3'),
+      useSafety: $('useSafety'), safetyBar: $('safetyBar'), safetyCode: $('safetyCode'),
+      useManualPairing: $('useManualPairing'),
+      manualReplyBox: $('manualReplyBox'), manualAnswerInput: $('manualAnswerInput'),
+      viewManualAnswer: $('viewManualAnswer'), manualAnswerText: $('manualAnswerText'),
+      copyManualAnswerBtn: $('copyManualAnswerBtn'), cancelManualAnswerBtn: $('cancelManualAnswerBtn'),
+      eraseSelect: $('eraseSelect'), durationSelect: $('durationSelect'),
+      lifetimeSelect: $('lifetimeSelect'), lifetimeBar: $('lifetimeBar'), lifetimeDot: $('lifetimeDot'), lifetimeText: $('lifetimeText'),
+      cancelBtn: $('cancelBtn'), cancelBtn2: $('cancelBtn2'), myText: $('myText'), theirText: $('theirText'), clearMineBtn: $('clearMineBtn'), endBtn: $('endBtn'),
+      panicBtn: $('panicBtn')
+    };
+
+    const state = {
+      pc: null,
+      dc: null,
+      connected: false,
+      isCreator: false,
+      room: '',
+      token: '',
+      secretBytes: null,
+      mode: 'stun',
+      answerApplied: false,
+      pollTimer: null,
+      mySeq: 0,
+      theirSeq: 0,
+      myClearTimer: null,
+      theirClearTimer: null,
+      watchdogTimer: null,
+      keyBytes: null,
+      passwordPending: false,
+      safetyEnabled: true,
+      linkValue: '',
+      idleWarnTimer: null,
+      idleEndTimer: null,
+      helloTimer: null,
+      lifetimeMinutes: 0,
+      lifetimeDeadline: 0,
+      lifetimeTick: null,
+      manualMode: false,
+      manualInvitePending: false,
+      manualPendingOfferBlob: '',
+      peerVerified: false,
+      localClosing: false
+    };
+
+    function showView(name) {
+      for (const v of ['viewStart', 'viewShare', 'viewJoin', 'viewPass', 'viewManualAnswer', 'viewChat']) {
+        el[v].classList.toggle('hidden', v !== name);
+      }
+    }
+
+    function setStatus(text, kind) {
+      el.statusText.textContent = text;
+      el.statusDot.className = 'dot' + (kind && kind !== 'idle' ? ' ' + kind : '');
+    }
+
+    function log(text, kind) {
+      el.log.textContent = text;
+      el.log.className = 'log' + (kind ? ' ' + kind : '');
+    }
+
+    const WISP_SERVER_METHODS = new Set([
+      'gasCreateRoom',
+      'gasGetOffer',
+      'gasSetAnswer',
+      'gasGetAnswer',
+      'gasDeleteRoom',
+      'gasHealth'
+    ]);
+
+    const WISP_RPC_PATH = '/__wisp_rpc';
+
+    function server(method, ...args) {
+      if (!WISP_SERVER_METHODS.has(method)) {
+        return Promise.reject(new Error('blocked server method.'));
+      }
+
+      const gasRun = window.google &&
+                     window.google.script &&
+                     window.google.script.run;
+
+      if (gasRun) {
+        return new Promise((resolve, reject) => {
+          const runner = gasRun
+            .withSuccessHandler(resolve)
+            .withFailureHandler(err => {
+              reject(new Error(err && err.message ? err.message : String(err || 'server error')));
+            });
+
+          if (typeof runner[method] !== 'function') {
+            reject(new Error('server method not found.'));
+            return;
+          }
+
+          runner[method](...args);
+        });
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 25000);
+
+      return fetch(WISP_RPC_PATH, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        cache: 'no-store',
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+        signal: controller.signal,
+        body: JSON.stringify({ method, args })
+      })
+        .then(async response => {
+          const text = await response.text();
+          let data = null;
+
+          try {
+            data = text ? JSON.parse(text) : null;
+          } catch (_) {
+            throw new Error('invalid server response.');
+          }
+
+          if (!response.ok) {
+            throw new Error((data && data.error) || 'server error');
+          }
+
+          if (!data) {
+            throw new Error('empty server response.');
+          }
+
+          if (data.ok === false && data.error) {
+            throw new Error(data.error);
+          }
+
+          return data;
+        })
+        .catch(err => {
+          if (err && err.name === 'AbortError') {
+            throw new Error('server timeout.');
+          }
+
+          throw new Error(err && err.message ? err.message : String(err || 'server error'));
+        })
+        .finally(() => {
+          clearTimeout(timer);
+        });
+    }
+
+    function getIceServers(mode) {
+      if (mode === 'stun') return [{ urls: 'stun:stun.l.google.com:19302' }];
+      return [];
+    }
+
+    function makePeerConnection(mode) {
+      const pc = new RTCPeerConnection({ iceServers: getIceServers(mode), iceCandidatePoolSize: 2 });
+      pc.addEventListener('connectionstatechange', () => {
+        if (pc.connectionState === 'connected') {
+          state.connected = true;
+          setStatus('connected', 'on');
+        } else if (pc.connectionState === 'failed') {
+          setStatus('failed', 'off');
+          log('connection failed. signaling worked, but this network may require a TURN relay. try another network.', 'bad');
+        } else if (pc.connectionState === 'disconnected') {
+          setStatus('disconnected', 'off');
+        } else if (pc.connectionState === 'closed') {
+          setStatus('closed', 'off');
+        } else {
+          setStatus(pc.connectionState + '…', 'busy');
+        }
+      });
+      pc.addEventListener('iceconnectionstatechange', () => {
+        if (pc.iceConnectionState === 'failed') log('ICE failed. Some networks need TURN relay; this version uses STUN only.', 'bad');
+      });
+      pc.addEventListener('datachannel', event => setupDataChannel(event.channel));
+      return pc;
+    }
+
+    function setupDataChannel(channel) {
+      state.dc = channel;
+      channel.addEventListener('open', () => {
+        state.connected = true;
+        clearTimeout(state.watchdogTimer);
+        setStatus('connected', 'on');
+        openChat();
+        el.myText.disabled = true;
+        el.myText.placeholder = 'verifying secure session...';
+        showSafetyCode();
+        startLifetime();
+        resetIdleTimer();
+        sendHello();
+        startHelloWatchdog();
+        tryCleanupRoom();
+      });
+      channel.addEventListener('message', async event => {
+        try {
+          const payload = await decryptPayload(state.keyBytes, String(event.data));
+          handleMessage(payload);
+        } catch (_) { /* anything that does not open with our key is ignored */ }
+      });
+      channel.addEventListener('close', () => {
+      const wasConnected = state.connected;
+      state.connected = false;
+      setStatus('closed', 'off');
+
+      if (wasConnected && !state.localClosing) {
+        endSession(false, true);
+        log('direct channel closed — local screen wiped for privacy.', 'warn');
+      }
+    });
+      channel.addEventListener('error', () => setStatus('channel error', 'off'));
+    }
+
+    async function send(message) {
+      // Defense in depth: every chat message is AES-GCM encrypted in the browser
+      // BEFORE entering the DataChannel (which is itself DTLS encrypted).
+      if (!state.dc || state.dc.readyState !== 'open' || !state.keyBytes) return false;
+      try {
+        const blob = await encryptPayload(state.keyBytes, message);
+        state.dc.send(blob);
+        return true;
+      } catch (_) { return false; }
+    }
+
+    function handleMessage(message) {
+      if (!message || typeof message.type !== 'string') return;
+
+      if (message.type === 'end') {
+        endSession(false);
+        log('the other person ended the session.', 'warn');
+        return;
+      }
+
+      if (message.type === 'hello') {
+        clearTimeout(state.helloTimer);
+        verifyPeerVersion(message);
+        return;
+      }
+
+      // Do not accept chat/typing messages before the other side proves it runs the same code.
+      if (!state.peerVerified) return;
+
+      resetIdleTimer();
+
+      if (message.type === 'typing') {
+        const seq = Number.isSafeInteger(message.seq) ? message.seq : 0;
+        if (seq < state.theirSeq) return;
+        state.theirSeq = seq;
+        el.theirText.value = String(message.text || '').slice(0, MAX_TEXT);
+        startTheirClearFallback();
+      } else if (message.type === 'clear') {
+        const seq = Number.isSafeInteger(message.seq) ? message.seq : state.theirSeq;
+        if (seq < state.theirSeq) return;
+        el.theirText.value = '';
+        clearTimeout(state.theirClearTimer);
+      }
+    }
+
+    function extractManualParam(rawHash, name) {
+      const clean = String(rawHash || '').replace(/^#/, '');
+      const params = new URLSearchParams(clean);
+      const value = params.get(name);
+      if (!value) throw new Error('missing #' + name + '= data.');
+      return value.trim();
+    }
+
+    function makeManualLink(kind, blob, secret, wantsPassword) {
+      const unevaluated = WEB_APP_URL.indexOf('<' + '?') !== -1;
+      const baseUrl = (WEB_APP_URL && !unevaluated ? WEB_APP_URL : location.href.split('#')[0]);
+
+      let url = baseUrl + '#' + encodeURIComponent(kind) + '=' + encodeURIComponent(blob);
+
+      if (secret) {
+        url += '&k=' + encodeURIComponent(secret);
+      }
+
+      if (wantsPassword) {
+        url += '&p=1';
+      }
+
+      return url;
+    }
+
+    function validateManualSignalPayload(payload, kind) {
+      if (!payload || payload.app !== APP_ID) throw new Error('this is not a Wisp manual payload.');
+      if (payload.version !== VERSION) throw new Error('unsupported Wisp version.');
+      if (payload.kind !== kind) throw new Error('expected ' + kind + '.');
+      if (typeof payload.sdp !== 'string' || payload.sdp.length < 40) throw new Error('invalid WebRTC data.');
+    }
+
+    async function createManualInvite() {
+      if (!window.RTCPeerConnection) { log('this browser does not support WebRTC.', 'bad'); return; }
+      if (!window.crypto || !crypto.subtle) { log('this browser does not support WebCrypto.', 'bad'); return; }
+
+      const wantsPassword = el.usePassword.checked;
+      const password = String(el.passwordInput.value || '').trim();
+
+      if (wantsPassword && !/^[A-Za-z0-9]{4,8}$/.test(password)) {
+        log('password must be 4 to 8 letters or numbers.', 'bad');
+        el.passwordInput.focus();
+        return;
+      }
+
+      await endSession(false, true);
+
+      state.manualMode = true;
+      state.manualInvitePending = true;
+      state.isCreator = true;
+      state.mode = el.useStun.checked ? 'stun' : 'none';
+      state.room = '';
+      state.token = '';
+      state.secretBytes = randomBytes(16);
+      state.keyBytes = wantsPassword ? await deriveKeyBytes(state.secretBytes, password) : state.secretBytes;
+      state.answerApplied = false;
+
+      setStatus('creating manual invite…', 'busy');
+      log('creating manual invite without Code.gs…');
+      el.createBtn.disabled = true;
+
+      try {
+        state.pc = makePeerConnection(state.mode);
+        setupDataChannel(state.pc.createDataChannel('wisp-live', { ordered: true }));
+
+        const offer = await state.pc.createOffer();
+        await state.pc.setLocalDescription(offer);
+        await waitForIceComplete(state.pc, ICE_WAIT_MS);
+
+        state.safetyEnabled = el.useSafety.checked;
+        const eraseSeconds = applyEraseSeconds(el.eraseSelect.value);
+        const durationMinutes = applyDurationMinutes(el.durationSelect.value);
+        state.lifetimeMinutes = applyLifetimeMinutes(el.lifetimeSelect ? el.lifetimeSelect.value : 0);
+
+        const payload = {
+          app: APP_ID,
+          version: VERSION,
+          kind: 'offer',
+          mode: state.mode,
+          safety: state.safetyEnabled,
+          erase: eraseSeconds,
+          duration: durationMinutes,
+          lifetime: state.lifetimeMinutes,
+          sdp: state.pc.localDescription.sdp
+        };
+
+        const encryptedOffer = await encryptPayload(state.keyBytes, payload);
+        const secret = bytesToBase64Url(state.secretBytes);
+
+        state.linkValue = makeManualLink('offer', encryptedOffer, secret, wantsPassword);
+        el.roomLink.value = state.linkValue;
+
+        revealLink(true);
+        showView('viewShare');
+
+        if (el.manualReplyBox) el.manualReplyBox.classList.remove('hidden');
+        if (el.manualAnswerInput) el.manualAnswerInput.value = '';
+
+        setStatus('waiting for manual reply', 'busy');
+        log('manual invite ready. send this link, then paste the reply link below.', 'ok');
+      } catch (err) {
+        setStatus('error', 'off');
+        log('could not create manual invite: ' + errorText(err), 'bad');
+        endSession(false, true);
+      } finally {
+        el.createBtn.disabled = false;
+      }
+    }
+
+    async function acceptManualOffer(rawHash) {
+      if (!window.RTCPeerConnection) { log('this browser does not support WebRTC.', 'bad'); return false; }
+      if (!window.crypto || !crypto.subtle) { log('this browser does not support WebCrypto.', 'bad'); return false; }
+
+      const clean = String(rawHash || '').replace(/^#/, '');
+      const params = new URLSearchParams(clean);
+      const encryptedOffer = params.get('offer');
+      const secret = params.get('k');
+
+      if (!encryptedOffer || !secret) {
+        log('invalid manual invite link.', 'bad');
+        return false;
+      }
+
+      await endSession(false, true);
+
+      state.manualMode = true;
+      state.manualInvitePending = false;
+      state.isCreator = false;
+      state.room = '';
+      state.token = '';
+      state.secretBytes = base64UrlToBytes(secret);
+      state.manualPendingOfferBlob = encryptedOffer;
+
+      if (params.get('p') === '1') {
+        state.passwordPending = true;
+        showView('viewPass');
+        setStatus('password required', 'busy');
+        log('manual invite is protected. enter the password to continue.');
+        setTimeout(() => el.roomPassInput.focus(), 0);
+        return true;
+      }
+
+      state.keyBytes = state.secretBytes;
+      return finishManualOffer(encryptedOffer);
+    }
+
+    async function finishManualOffer(encryptedOffer) {
+      showView('viewJoin');
+      setStatus('reading manual invite…', 'busy');
+      log('opening manual invite and generating reply…');
+
+      try {
+        const offerPayload = await decryptPayload(state.keyBytes, encryptedOffer);
+        validateManualSignalPayload(offerPayload, 'offer');
+
+        state.mode = offerPayload.mode === 'none' ? 'none' : 'stun';
+        state.safetyEnabled = offerPayload.safety !== false;
+
+        applyEraseSeconds(offerPayload.erase);
+        applyDurationMinutes(offerPayload.duration);
+        state.lifetimeMinutes = applyLifetimeMinutes(offerPayload.lifetime);
+
+        el.useSafety.checked = state.safetyEnabled;
+        el.useStun.checked = state.mode === 'stun';
+
+        state.pc = makePeerConnection(state.mode);
+        await state.pc.setRemoteDescription({ type: 'offer', sdp: offerPayload.sdp });
+
+        const answer = await state.pc.createAnswer();
+        await state.pc.setLocalDescription(answer);
+        await waitForIceComplete(state.pc, ICE_WAIT_MS);
+
+        const answerPayload = {
+          app: APP_ID,
+          version: VERSION,
+          kind: 'answer',
+          mode: state.mode,
+          sdp: state.pc.localDescription.sdp
+        };
+
+        const encryptedAnswer = await encryptPayload(state.keyBytes, answerPayload);
+
+        el.manualAnswerText.value = makeManualLink('answer', encryptedAnswer, '', false);
+        state.manualPendingOfferBlob = '';
+        state.passwordPending = false;
+
+        showView('viewManualAnswer');
+        setStatus('waiting for creator', 'busy');
+        log('manual reply ready. send this reply link back and keep this tab open.', 'ok');
+        startConnectWatchdog();
+        return true;
+      } catch (err) {
+        if (state.passwordPending && err && err.name === 'OperationError') {
+          showView('viewPass');
+          setStatus('wrong password', 'off');
+          log('wrong password. try again.', 'bad');
+          setTimeout(() => el.roomPassInput.focus(), 0);
+          return false;
+        }
+
+        showView('viewStart');
+        setStatus('error', 'off');
+        log('could not open manual invite: ' + errorText(err), 'bad');
+        return false;
+      }
+    }
+
+    async function applyManualAnswer(rawHash) {
+      if (!state.pc || !state.manualInvitePending) {
+        log('create a manual invite first — paste the reply in the original tab.', 'bad');
+        return false;
+      }
+
+      if (state.answerApplied || state.pc.signalingState === 'stable') {
+        log('manual reply already applied. opening channel…', 'ok');
+        return true;
+      }
+
+      if (state.pc.signalingState !== 'have-local-offer') {
+        log('not ready for this reply yet. current state: ' + state.pc.signalingState + '.', 'warn');
+        return false;
+      }
+
+      const clean = String(rawHash || '').replace(/^#/, '');
+      const encryptedAnswer = extractManualParam(clean, 'answer');
+
+      setStatus('connecting…', 'busy');
+      log('applying manual reply…');
+
+      try {
+        const answerPayload = await decryptPayload(state.keyBytes, encryptedAnswer);
+        validateManualSignalPayload(answerPayload, 'answer');
+
+        await state.pc.setRemoteDescription({ type: 'answer', sdp: answerPayload.sdp });
+
+        state.answerApplied = true;
+        state.manualInvitePending = false;
+
+        if (el.manualAnswerInput) el.manualAnswerInput.value = '';
+
+        log('manual reply applied. opening direct channel…', 'ok');
+        return true;
+      } catch (err) {
+        setStatus('error', 'off');
+        log('invalid manual reply: ' + errorText(err), 'bad');
+        return false;
+      }
+    }
+
+    async function createRoom() {
+      if (!window.RTCPeerConnection) { log('this browser does not support WebRTC.', 'bad'); return; }
+      if (!window.crypto || !crypto.subtle) { log('this browser does not support WebCrypto.', 'bad'); return; }
+
+      const wantsPassword = el.usePassword.checked;
+      const password = String(el.passwordInput.value || '').trim();
+      if (wantsPassword && !/^[A-Za-z0-9]{4,8}$/.test(password)) {
+        log('password must be 4 to 8 letters or numbers.', 'bad');
+        el.passwordInput.focus();
+        return;
+      }
+
+      await endSession(false, true);
+      if (el.manualReplyBox) el.manualReplyBox.classList.add('hidden');
+      state.manualMode = false;
+      state.manualInvitePending = false;
+      state.manualPendingOfferBlob = '';
+      state.isCreator = true;
+      state.mode = el.useStun.checked ? 'stun' : 'none';
+      state.room = randomRoomId();
+      state.token = randomToken(12);
+      state.secretBytes = randomBytes(16);
+      state.keyBytes = wantsPassword ? await deriveKeyBytes(state.secretBytes, password) : state.secretBytes;
+      state.answerApplied = false;
+
+      setStatus('creating room…', 'busy');
+      log('creating encrypted room…');
+      el.createBtn.disabled = true;
+
+      try {
+        state.pc = makePeerConnection(state.mode);
+        setupDataChannel(state.pc.createDataChannel('wisp-live', { ordered: true }));
+
+        const offer = await state.pc.createOffer();
+        await state.pc.setLocalDescription(offer);
+        await waitForIceComplete(state.pc, ICE_WAIT_MS);
+
+        state.safetyEnabled = el.useSafety.checked;
+        const eraseSeconds = applyEraseSeconds(el.eraseSelect.value);
+        const durationMinutes = applyDurationMinutes(el.durationSelect.value);
+        state.lifetimeMinutes = applyLifetimeMinutes(el.lifetimeSelect ? el.lifetimeSelect.value : 0);
+        const payload = {
+          app: APP_ID,
+          version: VERSION,
+          kind: 'offer',
+          room: state.room,
+          mode: state.mode,
+          safety: state.safetyEnabled,
+          erase: eraseSeconds,
+          duration: durationMinutes,
+          lifetime: state.lifetimeMinutes,
+          sdp: state.pc.localDescription.sdp
+        };
+        const encryptedOffer = await encryptPayload(state.keyBytes, payload);
+        await server('gasCreateRoom', state.room, state.token, encryptedOffer);
+
+        const secret = bytesToBase64Url(state.secretBytes);
+        // NOTE: never write the raw scriptlet delimiter sequence in this file —
+        // the Apps Script template compiler scans the raw text and would treat it
+        // as an unterminated scriptlet, breaking template.evaluate() in Code.gs.
+        const unevaluated = WEB_APP_URL.indexOf('<' + '?') !== -1;
+        const baseUrl = (WEB_APP_URL && !unevaluated ? WEB_APP_URL : location.href.split('#')[0]);
+        state.linkValue = baseUrl + '#r=' + encodeURIComponent(state.room) + '&k=' + encodeURIComponent(secret) + '&t=' + encodeURIComponent(state.token) + (wantsPassword ? '&p=1' : '');
+        el.roomLink.value = state.linkValue;
+        revealLink(true);
+        showView('viewShare');
+        setStatus('waiting', 'busy');
+        log('room ready. send the link and keep this tab open.', 'ok');
+        startAnswerPolling();
+      } catch (err) {
+        setStatus('error', 'off');
+        log('could not create room: ' + errorText(err), 'bad');
+        endSession(false, true);
+      } finally {
+        el.createBtn.disabled = false;
+      }
+    }
+
+    async function joinRoomFromHash() {
+      // CRITICAL for Apps Script: the app runs inside a sandboxed iframe and the
+      // iframe's location.hash is NOT the outer page's hash. The official API
+      // google.script.url.getLocation() delivers the real hash of the /exec URL.
+      const hash = await getOuterHash();
+      if (hash) await joinFromHashString(hash);
+    }
+
+    function getOuterHash() {
+      return new Promise(resolve => {
+        let settled = false;
+        const finish = value => { if (!settled) { settled = true; resolve(String(value || '')); } };
+        try {
+          if (window.google && google.script && google.script.url && google.script.url.getLocation) {
+            google.script.url.getLocation(loc => {
+              const h = loc && loc.hash ? String(loc.hash) : '';
+              finish(h || (location.hash ? location.hash.slice(1) : ''));
+            });
+            // safety: if the callback never fires, fall back after 3s
+            setTimeout(() => finish(location.hash ? location.hash.slice(1) : ''), 3000);
+            return;
+          }
+        } catch (_) {}
+        finish(location.hash ? location.hash.slice(1) : '');
+      });
+    }
+
+    async function joinFromHashString(rawHash) {
+      const clean = String(rawHash || '').replace(/^#/, '');
+      const params = new URLSearchParams(clean);
+
+      if (params.get('offer')) {
+        return acceptManualOffer(clean);
+      }
+
+      if (params.get('answer')) {
+        return applyManualAnswer(clean);
+      }
+
+      const room = String(params.get('r') || '').trim().toUpperCase();
+      const secret = String(params.get('k') || '').trim();
+      const token = String(params.get('t') || '').trim();
+      if (!room && !secret && !token) return false;
+
+      if (!/^[A-Z2-9]{8}$/.test(room) || !secret || !token) {
+        log('invalid invite link.', 'bad');
+        return false;
+      }
+
+      if (!window.RTCPeerConnection) { log('this browser does not support WebRTC.', 'bad'); return false; }
+      if (!window.crypto || !crypto.subtle) { log('this browser does not support WebCrypto.', 'bad'); return false; }
+
+      await endSession(false, true);
+      state.isCreator = false;
+      state.room = room;
+      state.token = token;
+      state.secretBytes = base64UrlToBytes(secret);
+
+      if (params.get('p') === '1') {
+        state.passwordPending = true;
+        showView('viewPass');
+        setStatus('password required', 'busy');
+        log('this room is protected. enter the password to continue.');
+        setTimeout(() => el.roomPassInput.focus(), 0);
+        return true;
+      }
+
+      state.keyBytes = state.secretBytes;
+      return performJoin();
+    }
+
+    async function joinWithPassword() {
+      if (!state.secretBytes) { log('session was cancelled. open the link again.', 'bad'); return; }
+      const password = String(el.roomPassInput.value || '').trim();
+      if (!/^[A-Za-z0-9]{4,8}$/.test(password)) {
+        log('the password is 4 to 8 letters or numbers.', 'bad');
+        el.roomPassInput.focus();
+        return;
+      }
+      el.roomPassInput.value = '';
+      setStatus('checking password…', 'busy');
+      state.keyBytes = await deriveKeyBytes(state.secretBytes, password);
+
+      if (state.manualPendingOfferBlob) {
+          await finishManualOffer(state.manualPendingOfferBlob);
+          return;
+      }
+
+      await performJoin();
+    }
+
+    async function performJoin() {
+      showView('viewJoin');
+      setStatus('joining…', 'busy');
+      log('opening encrypted room…');
+
+      try {
+        const offerResult = await server('gasGetOffer', state.room, state.token);
+        if (offerResult && offerResult.used) {
+          showView('viewStart');
+          setStatus('room already used', 'off');
+          log('room already used. a wisp room connects only 2 people — ask for a new link.', 'bad');
+          return false;
+        }
+        if (!offerResult || !offerResult.ok || !offerResult.offer) throw new Error((offerResult && offerResult.error) || 'offer not found.');
+        const offerPayload = await decryptPayload(state.keyBytes, offerResult.offer);
+        validateSignalPayload(offerPayload, 'offer', state.room);
+        state.mode = offerPayload.mode === 'none' ? 'none' : 'stun';
+        state.safetyEnabled = offerPayload.safety !== false;
+        applyEraseSeconds(offerPayload.erase);
+        applyDurationMinutes(offerPayload.duration);
+        state.lifetimeMinutes = applyLifetimeMinutes(offerPayload.lifetime);
+        el.useSafety.checked = state.safetyEnabled;
+        el.useStun.checked = state.mode === 'stun';
+
+        state.pc = makePeerConnection(state.mode);
+        await state.pc.setRemoteDescription({ type: 'offer', sdp: offerPayload.sdp });
+        const answer = await state.pc.createAnswer();
+        await state.pc.setLocalDescription(answer);
+        await waitForIceComplete(state.pc, ICE_WAIT_MS);
+
+        const answerPayload = { app: APP_ID, version: VERSION, kind: 'answer', room: state.room, mode: state.mode, sdp: state.pc.localDescription.sdp };
+        const encryptedAnswer = await encryptPayload(state.keyBytes, answerPayload);
+        await server('gasSetAnswer', state.room, state.token, encryptedAnswer);
+
+        setStatus('connecting…', 'busy');
+        log('reply sent automatically. waiting for direct channel…', 'ok');
+        startConnectWatchdog();
+        return true;
+      } catch (err) {
+        if (state.passwordPending && err && err.name === 'OperationError') {
+          setStatus('wrong password', 'off');
+          showView('viewPass');
+          log('wrong password. try again.', 'bad');
+          setTimeout(() => el.roomPassInput.focus(), 0);
+          return false;
+        }
+        if (String(errorText(err)).indexOf('already used') !== -1) {
+          showView('viewStart');
+          setStatus('room already used', 'off');
+          log('room already used. a wisp room connects only 2 people — ask for a new link.', 'bad');
+          return false;
+        }
+        setStatus('error', 'off');
+        log('could not join room: ' + errorText(err), 'bad');
+        return false;
+      }
+    }
+
+    function startConnectWatchdog() {
+      clearTimeout(state.watchdogTimer);
+      state.watchdogTimer = setTimeout(() => {
+        if (!state.connected) log('still connecting… the inviter may have closed their tab, or this network may need a TURN relay.', 'warn');
+      }, 60000);
+    }
+
+    function startAnswerPolling() {
+      clearInterval(state.pollTimer);
+      let tries = 0;
+      let inFlight = false; // prevents overlapping server calls when one takes longer than POLL_MS
+      state.pollTimer = setInterval(async () => {
+        if (inFlight) return;
+        tries += 1;
+        if (!state.pc || state.answerApplied || state.connected) { clearInterval(state.pollTimer); return; }
+        if (tries > 420) { clearInterval(state.pollTimer); log('room timed out. create a new private room.', 'warn'); return; }
+        inFlight = true;
+        try {
+          const result = await server('gasGetAnswer', state.room, state.token);
+          if (result && result.ok && result.answer) await applyEncryptedAnswer(result.answer);
+        } catch (err) {
+          if (tries % 6 === 0) log('waiting for reply… ' + errorText(err), 'warn');
+        } finally {
+          inFlight = false;
+        }
+      }, POLL_MS);
+    }
+
+    async function applyEncryptedAnswer(encryptedAnswer) {
+      if (state.answerApplied || !state.pc) return;
+      if (state.pc.signalingState === 'stable') { state.answerApplied = true; return; }
+      if (state.pc.signalingState !== 'have-local-offer') return;
+
+      setStatus('connecting…', 'busy');
+      log('reply received. opening direct channel…', 'ok');
+      const answerPayload = await decryptPayload(state.keyBytes, encryptedAnswer);
+      validateSignalPayload(answerPayload, 'answer', state.room);
+      await state.pc.setRemoteDescription({ type: 'answer', sdp: answerPayload.sdp });
+      state.answerApplied = true;
+      clearInterval(state.pollTimer);
+    }
+
+    async function computeSafetyCode() {
+      // Both browsers derive the same code from the DTLS certificate fingerprints
+      // of BOTH sides (sorted, so the order is identical on the two screens).
+      // If the two screens ever showed different codes, the connection would
+      // not be the same one — that is exactly what this code detects.
+      const local = state.pc && state.pc.localDescription ? state.pc.localDescription.sdp : '';
+      const remote = state.pc && state.pc.remoteDescription ? state.pc.remoteDescription.sdp : '';
+      const fingerprints = sdp => (String(sdp).match(/a=fingerprint:[^\r\n]+/g) || []).join('|');
+      const material = [fingerprints(local), fingerprints(remote)].sort().join('||');
+      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(material)));
+      const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let code = '';
+      for (let i = 0; i < 8; i += 1) code += ALPHABET[digest[i] % ALPHABET.length];
+      return code.slice(0, 4) + ' ' + code.slice(4);
+    }
+
+    async function showSafetyCode() {
+      if (!state.safetyEnabled) { el.safetyBar.classList.add('hidden'); return; }
+      try {
+        el.safetyCode.textContent = await computeSafetyCode();
+        el.safetyBar.classList.remove('hidden');
+      } catch (_) { el.safetyBar.classList.add('hidden'); }
+    }
+
+    let CODE_FINGERPRINT = '';
+
+    async function ensureCodeFingerprint() {
+      // The fingerprint is the SHA-256 of this page's own source code, computed
+      // at runtime. Any edit to the code — even a single character — changes it
+      // automatically. No version number to remember to update.
+      if (CODE_FINGERPRINT) return CODE_FINGERPRINT;
+      try {
+        const scripts = Array.from(document.querySelectorAll('script'));
+        const source = scripts.map(s => s.textContent || '').join('\n');
+        const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source)));
+        CODE_FINGERPRINT = Array.from(digest.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join('');
+      } catch (_) {
+        CODE_FINGERPRINT = 'unavailable';
+      }
+      return CODE_FINGERPRINT;
+    }
+
+    async function sendHello() {
+      const fp = await ensureCodeFingerprint();
+      send({ type: 'hello', version: VERSION, fp: fp });
+    }
+
+    function startHelloWatchdog() {
+      clearTimeout(state.helloTimer);
+      state.helloTimer = setTimeout(async () => {
+        await endSession(false);
+        log('session blocked: the other side did not confirm its code version. both must use the exact same deployment.', 'bad');
+      }, 10000);
+    }
+
+    async function verifyPeerVersion(message) {
+      const mine = await ensureCodeFingerprint();
+      const theirs = String(message.fp || '');
+
+      if (theirs && mine !== 'unavailable' && theirs === mine) {
+        state.peerVerified = true;
+        el.myText.disabled = false;
+        el.myText.placeholder = 'type here — every keystroke is sent live…';
+        el.myText.focus();
+        log('version check passed — both sides run the exact same code.', 'ok');
+        return;
+      }
+
+      await endSession(false);
+      log('session blocked: the other side is running a DIFFERENT version of the code. both must use the exact same deployment.', 'bad');
+    }
+
+    function applyEraseSeconds(seconds) {
+      // 0 = never auto-erase.
+      // Otherwise clamp hard to 1..10 seconds — never trust a value blindly, even our own.
+      let n = Number(seconds);
+      if (!Number.isFinite(n)) n = 3;
+      n = Math.round(n);
+
+      if (n === 0) {
+        CLEAR_DELAY_MS = 0;
+        REMOTE_CLEAR_FALLBACK_MS = 0;
+        return 0;
+      }
+
+      const s = Math.min(10, Math.max(1, n));
+      CLEAR_DELAY_MS = s * 1000;
+      REMOTE_CLEAR_FALLBACK_MS = CLEAR_DELAY_MS + 1500;
+      return s;
+    }
+
+    function applyDurationMinutes(minutes) {
+      // Clamp hard to 5..60 minutes.
+      let n = Number(minutes);
+      if (!Number.isFinite(n)) n = 10;
+      const m = Math.min(60, Math.max(5, Math.round(n)));
+      IDLE_LIMIT_MS = m * 60 * 1000;
+      return m;
+    }
+
+    function applyLifetimeMinutes(minutes) {
+      // 0 = no limit. Otherwise clamp hard to 5..60 minutes.
+      let n = Number(minutes);
+      if (!Number.isFinite(n)) n = 0;
+      n = Math.round(n);
+      if (n <= 0) return 0;
+      return Math.min(60, Math.max(5, n));
+    }
+
+    function startLifetime() {
+      clearInterval(state.lifetimeTick);
+      if (!state.lifetimeMinutes) { el.lifetimeBar.classList.add('hidden'); return; }
+      state.lifetimeDeadline = Date.now() + state.lifetimeMinutes * 60 * 1000;
+      el.lifetimeBar.classList.remove('hidden');
+      renderLifetime();
+      state.lifetimeTick = setInterval(renderLifetime, 1000);
+    }
+
+    function renderLifetime() {
+      const msLeft = state.lifetimeDeadline - Date.now();
+      if (msLeft <= 0) {
+        clearInterval(state.lifetimeTick);
+        el.lifetimeText.textContent = 'room closed';
+        endSession(true);
+        log('room closed automatically — its lifetime ended. nothing was stored.', 'warn');
+        return;
+      }
+      const totalMin = Math.ceil(msLeft / 60000);
+      // Under 1 minute: show seconds and turn the dot red. Otherwise show whole minutes.
+      if (msLeft <= 60000) {
+        const sec = Math.ceil(msLeft / 1000);
+        el.lifetimeText.textContent = 'closes in ' + sec + 's';
+        el.lifetimeDot.className = 'dot off';
+      } else {
+        el.lifetimeText.textContent = 'closes in ' + totalMin + ' min';
+        el.lifetimeDot.className = 'dot on';
+      }
+    }
+
+    function panicWipe() {
+      // Wipe the SCREEN first, synchronously — speed is the whole point of panic.
+      el.myText.value = '';
+      el.theirText.value = '';
+      el.safetyCode.textContent = '';
+      el.safetyBar.classList.add('hidden');
+      el.passwordInput.value = '';
+      el.roomPassInput.value = '';
+      showView('viewStart');
+      setStatus('offline', 'idle');
+      log('ready. create a private room and send one link.');
+      // STEP 2 — tell the other side to wipe too (notify=true), THEN clean up connection,
+      // server room and memory. notify=true sends the encrypted 'end' before closing,
+      // so the other screen clears right away instead of waiting for a timer.
+      endSession(true, true);
+    }
+
+    function resetIdleTimer() {
+      // Every keystroke — mine or theirs — restarts the 10-minute clock.
+      if (!state.connected) return;
+      clearTimeout(state.idleWarnTimer);
+      clearTimeout(state.idleEndTimer);
+      state.idleWarnTimer = setTimeout(() => {
+        log('no activity — the session will end in 1 minute. type anything to keep it alive.', 'warn');
+      }, IDLE_LIMIT_MS - 60000);
+      state.idleEndTimer = setTimeout(async () => {
+        await endSession(true);
+        log('session ended after ' + Math.round(IDLE_LIMIT_MS / 60000) + ' minutes of inactivity. nothing was stored.', 'warn');
+      }, IDLE_LIMIT_MS);
+    }
+
+    function openChat() {
+      showView('viewChat');
+      log('connected. type on the left — the other side sees it live.', 'ok');
+    }
+
+    function sendTypingNow() {
+      if (!state.connected || !state.peerVerified) return;
+      const text = el.myText.value.slice(0, MAX_TEXT);
+      if (el.myText.value !== text) el.myText.value = text;
+      state.mySeq += 1;
+      send({ type: 'typing', seq: state.mySeq, text });
+    }
+
+    function startMyClearTimer() {
+      clearTimeout(state.myClearTimer);
+      if (CLEAR_DELAY_MS <= 0) return;
+      state.myClearTimer = setTimeout(() => clearMine(), CLEAR_DELAY_MS);
+    }
+
+    function startTheirClearFallback() {
+      clearTimeout(state.theirClearTimer);
+      if (REMOTE_CLEAR_FALLBACK_MS <= 0) return;
+      state.theirClearTimer = setTimeout(() => { el.theirText.value = ''; }, REMOTE_CLEAR_FALLBACK_MS);
+    }
+
+    function clearMine() {
+      clearTimeout(state.myClearTimer);
+      el.myText.value = '';
+      state.mySeq += 1;
+      send({ type: 'clear', seq: state.mySeq });
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async function notifyPeerEnd() {
+      if (!state.dc || state.dc.readyState !== 'open') return;
+
+      try {
+        await send({ type: 'end' });
+        await sleep(120);
+
+        if (state.dc && state.dc.readyState === 'open') {
+          await send({ type: 'end' });
+          await sleep(80);
+        }
+      } catch (_) {}
+    }
+
+    async function endSession(notify, silent) {
+      state.localClosing = true;
+      if (notify) await notifyPeerEnd();
+      clearInterval(state.pollTimer);
+      clearTimeout(state.myClearTimer);
+      clearTimeout(state.theirClearTimer);
+      clearTimeout(state.watchdogTimer);
+      clearTimeout(state.idleWarnTimer);
+      clearTimeout(state.idleEndTimer);
+      clearTimeout(state.helloTimer);
+      clearInterval(state.lifetimeTick);
+      try { if (state.dc) state.dc.close(); } catch (_) {}
+      try { if (state.pc) state.pc.close(); } catch (_) {}
+      // best-effort: remove the encrypted room from the server cache right away
+      await tryCleanupRoom();
+      state.pc = null;
+      state.dc = null;
+      state.connected = false;
+      state.answerApplied = false;
+      state.pollTimer = null;
+      state.myClearTimer = null;
+      state.theirClearTimer = null;
+      state.watchdogTimer = null;
+      state.idleWarnTimer = null;
+      state.idleEndTimer = null;
+      state.helloTimer = null;
+      state.lifetimeTick = null;
+      state.lifetimeMinutes = 0;
+      state.lifetimeDeadline = 0;
+      state.manualMode = false;
+      state.manualInvitePending = false;
+      state.manualPendingOfferBlob = '';
+
+      el.lifetimeBar.classList.add('hidden');
+
+      if (el.manualReplyBox) el.manualReplyBox.classList.add('hidden');
+      if (el.manualAnswerInput) el.manualAnswerInput.value = '';
+      if (el.manualAnswerText) el.manualAnswerText.value = '';
+
+      el.lifetimeText.textContent = '';
+      el.lifetimeDot.className = 'dot on';
+      state.mySeq = 0;
+      state.theirSeq = 0;
+      state.room = '';
+      state.token = '';
+      state.secretBytes = null;
+      state.keyBytes = null;
+      state.passwordPending = false;
+      state.peerVerified = false;
+      el.myText.disabled = false;
+      el.myText.placeholder = 'type here — every keystroke is sent live…';
+      el.myText.value = '';
+      el.theirText.value = '';
+      el.roomLink.value = '';
+      state.linkValue = '';
+      el.safetyCode.textContent = '';
+      el.safetyBar.classList.add('hidden');
+      state.localClosing = false;
+      setStatus('offline', 'idle');
+      if (!silent) { showView('viewStart'); log('session ended. nothing was stored in this tab.', 'warn'); }
+    }
+
+    async function tryCleanupRoom() {
+      if (!state.room || !state.token) return;
+      try { await server('gasDeleteRoom', state.room, state.token); } catch (_) {}
+    }
+
+    function waitForIceComplete(pc, timeoutMs) {
+      if (pc.iceGatheringState === 'complete') return Promise.resolve();
+      return new Promise(resolve => {
+        let finished = false;
+        const done = () => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          pc.removeEventListener('icegatheringstatechange', check);
+          pc.removeEventListener('icecandidate', candidate);
+          resolve();
+        };
+        const check = () => { if (pc.iceGatheringState === 'complete') done(); };
+        const candidate = event => { if (!event.candidate) done(); };
+        const timer = setTimeout(done, timeoutMs);
+        pc.addEventListener('icegatheringstatechange', check);
+        pc.addEventListener('icecandidate', candidate);
+      });
+    }
+
+    async function deriveKeyBytes(secretBytes, password) {
+      // Turns (link secret + password) into the real encryption key.
+      // PBKDF2 with 210,000 rounds makes guessing passwords very slow,
+      // and the random link secret works as a unique salt per room.
+      const material = await crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode('wisp-pass:' + password),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveBits']
+      );
+      const bits = await crypto.subtle.deriveBits(
+        { name: 'PBKDF2', salt: secretBytes, iterations: 210000, hash: 'SHA-256' },
+        material,
+        128
+      );
+      return new Uint8Array(bits);
+    }
+
+    async function encryptPayload(secretBytes, payload) {
+      const iv = randomBytes(12);
+      const key = await crypto.subtle.importKey('raw', secretBytes, { name: 'AES-GCM' }, false, ['encrypt']);
+      const data = new TextEncoder().encode(JSON.stringify(payload));
+      const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
+      return 'g1.' + bytesToBase64Url(iv) + '.' + bytesToBase64Url(new Uint8Array(encrypted));
+    }
+
+    async function decryptPayload(secretBytes, blob) {
+      const parts = String(blob || '').split('.');
+      if (parts.length !== 3 || parts[0] !== 'g1') throw new Error('invalid encrypted setup data.');
+      const iv = base64UrlToBytes(parts[1]);
+      const ciphertext = base64UrlToBytes(parts[2]);
+      const key = await crypto.subtle.importKey('raw', secretBytes, { name: 'AES-GCM' }, false, ['decrypt']);
+      const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+      return JSON.parse(new TextDecoder().decode(new Uint8Array(plain)));
+    }
+
+    function validateSignalPayload(payload, kind, room) {
+      if (!payload || payload.app !== APP_ID) throw new Error('this is not a Wisp setup payload.');
+      if (payload.version !== VERSION) throw new Error('unsupported Wisp version.');
+      if (payload.kind !== kind) throw new Error('expected ' + kind + '.');
+      if (payload.room !== room) throw new Error('this setup belongs to another room.');
+      if (typeof payload.sdp !== 'string' || payload.sdp.length < 40) throw new Error('invalid WebRTC data.');
+    }
+
+    function randomRoomId() {
+      const bytes = randomBytes(8);
+      let out = '';
+      for (let i = 0; i < 8; i += 1) out += ROOM_CHARS[bytes[i] % ROOM_CHARS.length];
+      return out;
+    }
+
+    function randomToken(length) {
+      return bytesToBase64Url(randomBytes(length));
+    }
+
+    function randomBytes(length) {
+      const bytes = new Uint8Array(length);
+      crypto.getRandomValues(bytes);
+      return bytes;
+    }
+
+    function bytesToBase64Url(bytes) {
+      let binary = '';
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+      return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    }
+
+    function base64UrlToBytes(text) {
+      const s = String(text || '');
+      const base64 = s.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(s.length / 4) * 4, '=');
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      return bytes;
+    }
+
+    async function copyText(text) {
+      const value = String(text || '');
+      if (!value) return;
+      if (navigator.clipboard && window.isSecureContext) {
+        try { await navigator.clipboard.writeText(value); return; } catch (_) {}
+      }
+      const temp = document.createElement('textarea');
+      temp.value = value;
+      temp.setAttribute('readonly', '');
+      temp.style.position = 'fixed';
+      temp.style.left = '-9999px';
+      document.body.appendChild(temp);
+      temp.focus();
+      temp.select();
+      try { document.execCommand('copy'); } catch (_) {}
+      document.body.removeChild(temp);
+    }
+
+    function hideLink() {
+      el.roomLink.classList.add('hidden');
+      el.linkHiddenNote.classList.remove('hidden');
+      el.showLinkBtn.classList.remove('hidden');
+    }
+
+    function revealLink(fresh) {
+      el.roomLink.classList.remove('hidden');
+      el.linkHiddenNote.classList.add('hidden');
+      el.showLinkBtn.classList.add('hidden');
+      if (!fresh) log('link visible again. hide it after sharing.', 'warn');
+    }
+
+    async function shareLink() {
+      const link = state.linkValue;
+      if (!link) return;
+      if (navigator.share && window.isSecureContext) {
+        try {
+          await navigator.share({ title: 'Wisp private room', url: link });
+          hideLink();
+          log('link shared. keep this tab open.', 'ok');
+          return;
+        } catch (err) { if (err && err.name === 'AbortError') return; }
+      }
+      await copyText(link);
+      hideLink();
+      log('link copied. keep this tab open.', 'ok');
+    }
+
+    function errorText(err) {
+      return err && typeof err.message === 'string' ? err.message : String(err || 'unknown error');
+    }
+
+    el.createBtn.addEventListener('click', () => {
+      if (el.useManualPairing && el.useManualPairing.checked) {
+        createManualInvite();
+      } else {
+        createRoom();
+      }
+    });
+    el.usePassword.addEventListener('change', () => {
+      el.passwordInput.classList.toggle('hidden', !el.usePassword.checked);
+      if (el.usePassword.checked) el.passwordInput.focus();
+    });
+    el.roomPassBtn.addEventListener('click', joinWithPassword);
+    el.roomPassInput.addEventListener('keydown', event => { if (event.key === 'Enter') joinWithPassword(); });
+    el.cancelBtn3.addEventListener('click', () => endSession(false));
+    el.pasteLink.addEventListener('input', async () => {
+      const v = String(el.pasteLink.value || '');
+
+      if (
+        (v.includes('r=') && v.includes('k=') && v.includes('t=')) ||
+        v.includes('offer=') ||
+        v.includes('answer=')
+      ) {
+        const hash = v.includes('#') ? v.slice(v.indexOf('#') + 1) : v;
+        el.pasteLink.value = '';
+        await joinFromHashString(hash);
+      }
+    });
+    el.shareLinkBtn.addEventListener('click', shareLink);
+    el.copyLinkBtn.addEventListener('click', async () => {
+      if (!state.linkValue) return;
+      await copyText(state.linkValue);
+      hideLink();
+      log('link copied. keep this tab open.', 'ok');
+    });
+    el.showLinkBtn.addEventListener('click', () => revealLink(false));
+    el.cancelBtn.addEventListener('click', () => endSession(false));
+    el.cancelBtn2.addEventListener('click', () => endSession(false));
+    el.myText.addEventListener('input', () => { sendTypingNow(); startMyClearTimer(); resetIdleTimer(); });
+    el.clearMineBtn.addEventListener('click', clearMine);
+    el.endBtn.addEventListener('click', () => endSession(true));
+    el.panicBtn.addEventListener('click', panicWipe);
+    el.copyManualAnswerBtn.addEventListener('click', async () => {
+      if (!el.manualAnswerText.value) return;
+      await copyText(el.manualAnswerText.value);
+      log('manual reply copied. send it back to the creator.', 'ok');
+    });
+
+    el.cancelManualAnswerBtn.addEventListener('click', () => endSession(false));
+
+    el.manualAnswerInput.addEventListener('input', async () => {
+      const v = String(el.manualAnswerInput.value || '');
+      if (v.includes('answer=')) {
+        const hash = v.includes('#') ? v.slice(v.indexOf('#') + 1) : v;
+        await applyManualAnswer(hash);
+      }
+    });
+    let lastEscAt = 0;
+    window.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      const now = Date.now();
+      if (now - lastEscAt < PANIC_ESC_WINDOW_MS) {
+        lastEscAt = 0;
+        panicWipe();
+      } else {
+        lastEscAt = now;
+        log('press Esc again to wipe everything.', 'warn');
+      }
+    });
+    window.addEventListener('beforeunload', () => { try { if (state.dc && state.dc.readyState === 'open') state.dc.close(); } catch (_) {} try { if (state.pc) state.pc.close(); } catch (_) {} });
+
+    setStatus('offline', 'idle');
+    joinRoomFromHash();
+  </script>
+</body>
+</html>
