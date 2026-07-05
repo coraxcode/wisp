@@ -607,6 +607,31 @@ footer {
           <input id="useStun" type="checkbox" checked />
           <span><strong style="color: var(--text)">Compatibility mode.</strong> Uses public STUN only for route discovery. Chat text does not pass through STUN or Apps Script.</span>
         </label>
+                <label class="check">
+          <input id="useRelay" type="checkbox" />
+          <span><strong style="color: var(--text)">Hide my IP address (relay-only).</strong> Routes the whole connection through a secure TURN relay, so the other person only ever sees the relay's IP, never yours. A little slower. Chat text stays end-to-end encrypted.</span>
+        </label>
+
+        <div id="relayConfigBox" class="hidden" style="border: 1px dashed var(--line); border-radius: 7px; padding: .618rem 1rem; display: grid; gap: .618rem;">
+          <p class="lead">
+            <strong style="color: var(--text)">Relay is optional.</strong>
+            Enter your TURN details for this tab only. They are not saved in the browser.
+            If you create a relay room, these details are shared encrypted with the invitee so their browser can connect.
+          </p>
+
+          <textarea id="relayUrlsInput" placeholder="TURN URLs, one per line. Example:&#10;turn:global.relay.metered.ca:80&#10;turn:global.relay.metered.ca:80?transport=tcp&#10;turns:global.relay.metered.ca:443?transport=tcp" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+
+          <input id="relayUsernameInput" type="text" placeholder="TURN username" autocomplete="off"
+            style="width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); padding: .618rem 1rem; font: inherit; outline: none;" />
+
+          <input id="relayCredentialInput" type="password" placeholder="TURN credential / password" autocomplete="off"
+            style="width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); padding: .618rem 1rem; font: inherit; outline: none;" />
+
+          <div class="row">
+            <button id="applyRelayConfigBtn" type="button">Use relay for this tab</button>
+            <button id="clearRelayConfigBtn" class="ghost" type="button">Clear relay</button>
+          </div>
+        </div>
       </details>
     </section>
 
@@ -713,7 +738,11 @@ footer {
     const el = {
       statusDot: $('statusDot'), statusText: $('statusText'), log: $('log'),
       viewStart: $('viewStart'), viewShare: $('viewShare'), viewJoin: $('viewJoin'), viewChat: $('viewChat'),
-      createBtn: $('createBtn'), useStun: $('useStun'), pasteLink: $('pasteLink'), roomLink: $('roomLink'), shareLinkBtn: $('shareLinkBtn'), copyLinkBtn: $('copyLinkBtn'),
+            createBtn: $('createBtn'), useStun: $('useStun'), useRelay: $('useRelay'),
+      relayConfigBox: $('relayConfigBox'), relayUrlsInput: $('relayUrlsInput'),
+      relayUsernameInput: $('relayUsernameInput'), relayCredentialInput: $('relayCredentialInput'),
+      applyRelayConfigBtn: $('applyRelayConfigBtn'), clearRelayConfigBtn: $('clearRelayConfigBtn'),
+      pasteLink: $('pasteLink'), roomLink: $('roomLink'), shareLinkBtn: $('shareLinkBtn'), copyLinkBtn: $('copyLinkBtn'),
       linkHiddenNote: $('linkHiddenNote'), showLinkBtn: $('showLinkBtn'),
       usePassword: $('usePassword'), passwordInput: $('passwordInput'), viewPass: $('viewPass'), roomPassInput: $('roomPassInput'), roomPassBtn: $('roomPassBtn'), cancelBtn3: $('cancelBtn3'),
       useSafety: $('useSafety'), safetyBar: $('safetyBar'), safetyCode: $('safetyCode'),
@@ -864,13 +893,123 @@ footer {
         });
     }
 
+    // Relay-only ICE servers (site default, optional).
+    // Replace YOUR_USERNAME / YOUR_CREDENTIAL with the values from your TURN provider,
+    // or leave the placeholders: users can then type their own relay in the UI.
+    var RELAY_ICE_SERVERS = [
+      { urls: 'turn:global.relay.metered.ca:80',                 username: 'YOUR_USERNAME', credential: 'YOUR_CREDENTIAL' },
+      { urls: 'turn:global.relay.metered.ca:80?transport=tcp',   username: 'YOUR_USERNAME', credential: 'YOUR_CREDENTIAL' },
+      { urls: 'turn:global.relay.metered.ca:443',                username: 'YOUR_USERNAME', credential: 'YOUR_CREDENTIAL' },
+      { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: 'YOUR_USERNAME', credential: 'YOUR_CREDENTIAL' }
+    ];
+
+    // Runtime relay config entered by the user.
+    // It lives only in this tab's memory. It is not saved to localStorage.
+    let runtimeRelayIceServers = null;
+
+    // Relay config received inside an invite. Used only to join that room.
+    // It is NEVER re-shared in new invites and is wiped when the session ends.
+    let inviteRelayIceServers = null;
+
+    function normalizeRelayIceServers(servers) {
+      if (!Array.isArray(servers)) return [];
+
+      return servers.map(server => {
+        if (!server) return null;
+
+        const rawUrls = Array.isArray(server.urls) ? server.urls : [server.urls];
+        const urls = rawUrls
+          .map(url => String(url || '').trim())
+          .filter(url => /^turns?:/i.test(url) && url.length <= 300);
+
+        const username = String(server.username || '').trim().slice(0, 256);
+        const credential = String(server.credential || '').trim().slice(0, 256);
+
+        if (!urls.length || !username || !credential) return null;
+        if (username === 'YOUR_USERNAME' || credential === 'YOUR_CREDENTIAL') return null;
+
+        return { urls, username, credential };
+      }).filter(Boolean).slice(0, 8);
+    }
+
+    function getConfiguredRelayIceServers() {
+      const invite = normalizeRelayIceServers(inviteRelayIceServers);
+      if (invite.length) return invite;
+
+      const runtime = normalizeRelayIceServers(runtimeRelayIceServers);
+      if (runtime.length) return runtime;
+
+      return normalizeRelayIceServers(RELAY_ICE_SERVERS);
+    }
+
+    // Only MY OWN config counts when I am the one creating a room.
+    function hasOwnRelayConfig() {
+      if (normalizeRelayIceServers(runtimeRelayIceServers).length) return true;
+      return normalizeRelayIceServers(RELAY_ICE_SERVERS).length > 0;
+    }
+
     function getIceServers(mode) {
+      if (mode === 'relay') return getConfiguredRelayIceServers();
       if (mode === 'stun') return [{ urls: 'stun:stun.l.google.com:19302' }];
       return [];
     }
 
+    function hasUsableRelayConfig() {
+      return getConfiguredRelayIceServers().length > 0;
+    }
+
+    function readRelayConfigFromForm() {
+      const urls = String(el.relayUrlsInput.value || '')
+        .split(/[\n,]+/)
+        .map(url => url.trim())
+        .filter(Boolean);
+
+      const username = String(el.relayUsernameInput.value || '').trim();
+      const credential = String(el.relayCredentialInput.value || '').trim();
+
+      if (!urls.length) throw new Error('Enter at least one TURN URL.');
+      if (!username) throw new Error('Enter the TURN username.');
+      if (!credential) throw new Error('Enter the TURN credential.');
+
+      const servers = normalizeRelayIceServers([{ urls, username, credential }]);
+      if (!servers.length) throw new Error('Invalid TURN config. URLs must start with turn: or turns:.');
+
+      return servers;
+    }
+
+    function applyRelayConfigFromForm() {
+      try {
+        runtimeRelayIceServers = readRelayConfigFromForm();
+
+        // Clear visible secrets from the form after loading them into memory.
+        el.relayUrlsInput.value = '';
+        el.relayUsernameInput.value = '';
+        el.relayCredentialInput.value = '';
+
+        syncRelayUi(true);
+        log('Relay config loaded for this tab only. It was not saved.', 'ok');
+      } catch (err) {
+        log(errorText(err), 'bad');
+      }
+    }
+
+    function clearRuntimeRelayConfig() {
+      runtimeRelayIceServers = null;
+
+      if (el.relayUrlsInput) el.relayUrlsInput.value = '';
+      if (el.relayUsernameInput) el.relayUsernameInput.value = '';
+      if (el.relayCredentialInput) el.relayCredentialInput.value = '';
+
+      syncRelayUi(true);
+      log('Relay config cleared from this tab.', 'warn');
+    }
+
     function makePeerConnection(mode) {
-      const pc = new RTCPeerConnection({ iceServers: getIceServers(mode), iceCandidatePoolSize: 2 });
+      const pc = new RTCPeerConnection({
+        iceServers: getIceServers(mode),
+        iceCandidatePoolSize: 2,
+        iceTransportPolicy: mode === 'relay' ? 'relay' : 'all'
+      });
       pc.addEventListener('connectionstatechange', () => {
         if (pc.connectionState === 'connected') {
           state.connected = true;
@@ -887,8 +1026,14 @@ footer {
         }
       });
       pc.addEventListener('iceconnectionstatechange', () => {
-        if (pc.iceConnectionState === 'failed') log('ICE failed. Some networks need TURN relay; this version uses STUN only.', 'bad');
-      });
+      if (pc.iceConnectionState === 'failed') {
+        if (mode === 'relay') {
+          log('ICE failed. Check TURN server, username, credential, quota, or firewall.', 'bad');
+        } else {
+          log('ICE failed. Some networks may need TURN relay.', 'bad');
+        }
+      }
+    });
       pc.addEventListener('datachannel', event => setupDataChannel(event.channel));
       return pc;
     }
@@ -1045,12 +1190,18 @@ footer {
         return;
       }
 
+      if (el.useRelay.checked && !hasOwnRelayConfig()) {
+        log('relay-only is selected, but TURN username/credential were not configured.', 'bad');
+        syncRelayUi(true);
+        return;
+      }
+
       await endSession(false, true);
 
       state.manualMode = true;
       state.manualInvitePending = true;
       state.isCreator = true;
-      state.mode = el.useStun.checked ? 'stun' : 'none';
+      state.mode = el.useRelay.checked ? 'relay' : (el.useStun.checked ? 'stun' : 'none');
       state.room = '';
       state.token = '';
       state.secretBytes = randomBytes(16);
@@ -1079,6 +1230,7 @@ footer {
           version: VERSION,
           kind: 'offer',
           mode: state.mode,
+          relayIceServers: state.mode === 'relay' && runtimeRelayIceServers ? runtimeRelayIceServers : null,
           safety: state.safetyEnabled,
           erase: eraseSeconds,
           duration: durationMinutes,
@@ -1155,8 +1307,14 @@ footer {
         const offerPayload = await decryptPayload(state.keyBytes, encryptedOffer);
         validateManualSignalPayload(offerPayload, 'offer');
 
-        state.mode = offerPayload.mode === 'none' ? 'none' : 'stun';
+        state.mode = offerPayload.mode === 'none' ? 'none'
+                   : (offerPayload.mode === 'relay' ? 'relay' : 'stun');
         state.safetyEnabled = offerPayload.safety !== false;
+
+        if (state.mode === 'relay' && Array.isArray(offerPayload.relayIceServers)) {
+          const relayFromInvite = normalizeRelayIceServers(offerPayload.relayIceServers);
+          if (relayFromInvite.length) inviteRelayIceServers = relayFromInvite;
+        }
 
         applyEraseSeconds(offerPayload.erase);
         applyDurationMinutes(offerPayload.duration);
@@ -1164,6 +1322,18 @@ footer {
 
         el.useSafety.checked = state.safetyEnabled;
         el.useStun.checked = state.mode === 'stun';
+        el.useRelay.checked = state.mode === 'relay';
+
+        if (state.mode === 'relay' && !hasUsableRelayConfig()) {
+          el.useRelay.checked = false;
+          syncRelayUi(true);
+          showView('viewStart');
+          setStatus('relay not configured', 'off');
+          log('this invite requires relay-only mode, but TURN username/credential were not configured on this browser.', 'bad');
+          return false;
+        }
+
+        syncRelayUi(false);
 
         state.pc = makePeerConnection(state.mode);
         await state.pc.setRemoteDescription({ type: 'offer', sdp: offerPayload.sdp });
@@ -1261,13 +1431,19 @@ footer {
         return;
       }
 
+      if (el.useRelay.checked && !hasOwnRelayConfig()) {
+        log('relay-only is selected, but TURN username/credential were not configured.', 'bad');
+        syncRelayUi(true);
+        return;
+      }
+
       await endSession(false, true);
       if (el.manualReplyBox) el.manualReplyBox.classList.add('hidden');
       state.manualMode = false;
       state.manualInvitePending = false;
       state.manualPendingOfferBlob = '';
       state.isCreator = true;
-      state.mode = el.useStun.checked ? 'stun' : 'none';
+      state.mode = el.useRelay.checked ? 'relay' : (el.useStun.checked ? 'stun' : 'none');
       state.room = randomRoomId();
       state.token = randomToken(12);
       state.secretBytes = randomBytes(16);
@@ -1296,6 +1472,7 @@ footer {
           kind: 'offer',
           room: state.room,
           mode: state.mode,
+          relayIceServers: state.mode === 'relay' && runtimeRelayIceServers ? runtimeRelayIceServers : null,
           safety: state.safetyEnabled,
           erase: eraseSeconds,
           duration: durationMinutes,
@@ -1436,13 +1613,32 @@ footer {
         if (!offerResult || !offerResult.ok || !offerResult.offer) throw new Error((offerResult && offerResult.error) || 'offer not found.');
         const offerPayload = await decryptPayload(state.keyBytes, offerResult.offer);
         validateSignalPayload(offerPayload, 'offer', state.room);
-        state.mode = offerPayload.mode === 'none' ? 'none' : 'stun';
+        state.mode = offerPayload.mode === 'none' ? 'none'
+                   : (offerPayload.mode === 'relay' ? 'relay' : 'stun');
         state.safetyEnabled = offerPayload.safety !== false;
+
+        if (state.mode === 'relay' && Array.isArray(offerPayload.relayIceServers)) {
+          const relayFromInvite = normalizeRelayIceServers(offerPayload.relayIceServers);
+          if (relayFromInvite.length) inviteRelayIceServers = relayFromInvite;
+        }
+
         applyEraseSeconds(offerPayload.erase);
         applyDurationMinutes(offerPayload.duration);
         state.lifetimeMinutes = applyLifetimeMinutes(offerPayload.lifetime);
         el.useSafety.checked = state.safetyEnabled;
         el.useStun.checked = state.mode === 'stun';
+        el.useRelay.checked = state.mode === 'relay';
+
+        if (state.mode === 'relay' && !hasUsableRelayConfig()) {
+          el.useRelay.checked = false;
+          syncRelayUi(true);
+          showView('viewStart');
+          setStatus('relay not configured', 'off');
+          log('this room requires relay-only mode, but TURN username/credential were not configured on this browser.', 'bad');
+          return false;
+        }
+
+        syncRelayUi(false);
 
         state.pc = makePeerConnection(state.mode);
         await state.pc.setRemoteDescription({ type: 'offer', sdp: offerPayload.sdp });
@@ -1667,6 +1863,9 @@ footer {
       el.safetyBar.classList.add('hidden');
       el.passwordInput.value = '';
       el.roomPassInput.value = '';
+      if (el.relayUrlsInput) el.relayUrlsInput.value = '';
+      if (el.relayUsernameInput) el.relayUsernameInput.value = '';
+      if (el.relayCredentialInput) el.relayCredentialInput.value = '';
       showView('viewStart');
       setStatus('offline', 'idle');
       log('ready. create a private room and send one link.');
@@ -1774,6 +1973,9 @@ footer {
       state.manualInvitePending = false;
       state.manualPendingOfferBlob = '';
 
+      // Wipe relay config that came from an invite. It belongs to that session only.
+      inviteRelayIceServers = null;
+
       el.lifetimeBar.classList.add('hidden');
 
       if (el.manualReplyBox) el.manualReplyBox.classList.add('hidden');
@@ -1801,6 +2003,10 @@ footer {
       el.pasteLink.value = '';
       el.passwordInput.value = '';
       el.roomPassInput.value = '';
+
+      if (el.relayUrlsInput) el.relayUrlsInput.value = '';
+      if (el.relayUsernameInput) el.relayUsernameInput.value = '';
+      if (el.relayCredentialInput) el.relayCredentialInput.value = '';
 
       el.safetyCode.textContent = '';
       el.safetyBar.classList.add('hidden');
@@ -1968,6 +2174,51 @@ footer {
       return err && typeof err.message === 'string' ? err.message : String(err || 'unknown error');
     }
 
+     function syncRelayUi(restoreCompatibility) {
+      el.useRelay.disabled = false;
+
+      const needsRelayDetails = el.useRelay.checked && !hasUsableRelayConfig();
+
+      if (el.relayConfigBox) {
+        el.relayConfigBox.classList.toggle('hidden', !needsRelayDetails);
+      }
+
+      if (el.useRelay.checked) {
+        el.useStun.checked = false;
+        el.useStun.disabled = true;
+        return true;
+      }
+
+      el.useStun.disabled = false;
+
+      // Only restore STUN when the user manually turns relay off.
+      // Do not force STUN when the code is loading a room that intentionally uses "none".
+      if (restoreCompatibility && !el.useStun.checked) {
+        el.useStun.checked = true;
+      }
+
+      return true;
+    }
+
+    el.useRelay.addEventListener('change', () => {
+      syncRelayUi(true);
+
+      if (el.useRelay.checked && !hasOwnRelayConfig()) {
+        log('Relay-only needs TURN details. Enter your relay server, username and credential below.', 'warn');
+        setTimeout(() => {
+          if (el.relayUrlsInput) el.relayUrlsInput.focus();
+        }, 0);
+      }
+    });
+
+    if (el.applyRelayConfigBtn) {
+      el.applyRelayConfigBtn.addEventListener('click', applyRelayConfigFromForm);
+    }
+
+    if (el.clearRelayConfigBtn) {
+      el.clearRelayConfigBtn.addEventListener('click', clearRuntimeRelayConfig);
+    }
+
     el.createBtn.addEventListener('click', () => {
       if (el.useManualPairing && el.useManualPairing.checked) {
         createManualInvite();
@@ -2037,7 +2288,8 @@ footer {
       }
     });
     window.addEventListener('beforeunload', () => { try { if (state.dc && state.dc.readyState === 'open') state.dc.close(); } catch (_) {} try { if (state.pc) state.pc.close(); } catch (_) {} });
-
+    
+    syncRelayUi(false);
     setStatus('offline', 'idle');
     joinRoomFromHash();
   </script>
