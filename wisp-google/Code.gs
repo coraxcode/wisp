@@ -30,6 +30,10 @@ function doGet(e) {
 
   var output = template.evaluate();
   output.setTitle('wisp - private live chat');
+  // CRITICAL for mobile: Apps Script serves the page inside an iframe and ignores
+  // the <meta viewport> that is inside Index.html. The viewport must be set here,
+  // on the server output, or phones load the desktop-width wrapper instead.
+  output.addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
   output.setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DEFAULT);
   return output;
 }
