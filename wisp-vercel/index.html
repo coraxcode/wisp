@@ -973,6 +973,33 @@ footer {
       }
     }
 
+    function cleanAddressBar() {
+      // Removes #r=..., #k=..., #t=..., #offer=... or #answer=... from the visible URL
+      // after Wisp has already copied the needed values into memory.
+      // This is only a screen/privacy cleanup. It does not erase links from messengers,
+      // clipboard, browser extensions, screenshots, or remote devices.
+      try {
+        const cleanUrl = location.href.split('#')[0];
+
+        if (window.history && typeof window.history.replaceState === 'function') {
+          window.history.replaceState(null, document.title, cleanUrl);
+        }
+      } catch (_) {}
+
+      // Google Apps Script runs the page inside a sandboxed iframe.
+      // This best-effort cleanup asks Apps Script to also remove the outer /exec hash.
+      try {
+        if (
+          window.google &&
+          google.script &&
+          google.script.history &&
+          typeof google.script.history.replace === 'function'
+        ) {
+          google.script.history.replace({}, {}, '');
+        }
+      } catch (_) {}
+    }
+
     function extractManualParam(rawHash, name) {
       const clean = String(rawHash || '').replace(/^#/, '');
       const params = new URLSearchParams(clean);
@@ -1331,6 +1358,8 @@ footer {
       const clean = String(rawHash || '').replace(/^#/, '');
       const params = new URLSearchParams(clean);
 
+      cleanAddressBar();
+
       if (params.get('offer')) {
         return acceptManualOffer(clean);
       }
@@ -1662,6 +1691,7 @@ footer {
     }
 
     function openChat() {
+      cleanAddressBar();
       showView('viewChat');
       log('connected. type on the left — the other side sees it live.', 'ok');
     }
