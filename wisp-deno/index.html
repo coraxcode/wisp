@@ -7,7 +7,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="referrer" content="no-referrer" />
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
   <meta http-equiv="Pragma" content="no-cache" />
@@ -612,20 +612,20 @@ footer {
           <span><strong style="color: var(--text)">Hide my IP address (relay-only).</strong> Routes the whole connection through a secure TURN relay, so the other person only ever sees the relay's IP, never yours. A little slower. Chat text stays end-to-end encrypted.</span>
         </label>
 
-        <div id="relayConfigBox" class="hidden" style="border: 1px dashed var(--line); border-radius: 7px; padding: .618rem 1rem; display: grid; gap: .618rem;">
+        <div id="relayConfigBox" class="hidden" style="border: 1px dashed var(--line); border-radius: var(--radius-sm); padding: var(--s3); display: grid; gap: var(--s2); margin-top: var(--s2);">
           <p class="lead">
             <strong style="color: var(--text)">Relay is optional.</strong>
             Enter your TURN details for this tab only. They are not saved in the browser.
             If you create a relay room, these details are shared encrypted with the invitee so their browser can connect.
           </p>
 
-          <textarea id="relayUrlsInput" placeholder="TURN URLs, one per line. Example:&#10;turn:global.relay.metered.ca:80&#10;turn:global.relay.metered.ca:80?transport=tcp&#10;turns:global.relay.metered.ca:443?transport=tcp" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+          <textarea id="relayUrlsInput" placeholder="TURN server, one per line. Examples:&#10;free.expressturn.com:3478&#10;turn:free.expressturn.com:3478&#10;turn:free.expressturn.com:3478?transport=tcp" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
 
           <input id="relayUsernameInput" type="text" placeholder="TURN username" autocomplete="off"
-            style="width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); padding: .618rem 1rem; font: inherit; outline: none;" />
+            style="width: 100%; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(4, 8, 6, .85); color: var(--text); padding: var(--s1) var(--s2); font: inherit; font-size: 16px; outline: none;" />
 
           <input id="relayCredentialInput" type="password" placeholder="TURN credential / password" autocomplete="off"
-            style="width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); padding: .618rem 1rem; font: inherit; outline: none;" />
+            style="width: 100%; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(4, 8, 6, .85); color: var(--text); padding: var(--s1) var(--s2); font: inherit; font-size: 16px; outline: none;" />
 
           <div class="row">
             <button id="applyRelayConfigBtn" type="button">Use relay for this tab</button>
@@ -893,15 +893,9 @@ footer {
         });
     }
 
-    // Relay-only ICE servers (site default, optional).
-    // Replace YOUR_USERNAME / YOUR_CREDENTIAL with the values from your TURN provider,
-    // or leave the placeholders: users can then type their own relay in the UI.
-    var RELAY_ICE_SERVERS = [
-      { urls: 'turn:global.relay.metered.ca:80',                 username: 'YOUR_USERNAME', credential: 'YOUR_CREDENTIAL' },
-      { urls: 'turn:global.relay.metered.ca:80?transport=tcp',   username: 'YOUR_USERNAME', credential: 'YOUR_CREDENTIAL' },
-      { urls: 'turn:global.relay.metered.ca:443',                username: 'YOUR_USERNAME', credential: 'YOUR_CREDENTIAL' },
-      { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: 'YOUR_USERNAME', credential: 'YOUR_CREDENTIAL' }
-    ];
+    // There are no built-in TURN credentials.
+    // Users must enter their own TURN relay in the UI.
+    // This avoids shipping usernames/passwords inside the public index.html file.
 
     // Runtime relay config entered by the user.
     // It lives only in this tab's memory. It is not saved to localStorage.
@@ -926,7 +920,6 @@ footer {
         const credential = String(server.credential || '').trim().slice(0, 256);
 
         if (!urls.length || !username || !credential) return null;
-        if (username === 'YOUR_USERNAME' || credential === 'YOUR_CREDENTIAL') return null;
 
         return { urls, username, credential };
       }).filter(Boolean).slice(0, 8);
@@ -939,13 +932,11 @@ footer {
       const runtime = normalizeRelayIceServers(runtimeRelayIceServers);
       if (runtime.length) return runtime;
 
-      return normalizeRelayIceServers(RELAY_ICE_SERVERS);
+      return [];
     }
 
-    // Only MY OWN config counts when I am the one creating a room.
     function hasOwnRelayConfig() {
-      if (normalizeRelayIceServers(runtimeRelayIceServers).length) return true;
-      return normalizeRelayIceServers(RELAY_ICE_SERVERS).length > 0;
+      return normalizeRelayIceServers(runtimeRelayIceServers).length > 0;
     }
 
     function getIceServers(mode) {
@@ -958,11 +949,42 @@ footer {
       return getConfiguredRelayIceServers().length > 0;
     }
 
+    function normalizeRelayUrlInput(rawUrl) {
+      let url = String(rawUrl || '').trim();
+
+      if (!url) return [];
+
+      // Remove accidental spaces inside the URL.
+      url = url.replace(/\s+/g, '');
+
+      // If the user pasted only host:port, assume normal TURN.
+      // Example: free.expressturn.com:3478 -> turn:free.expressturn.com:3478
+      if (!/^turns?:/i.test(url)) {
+        url = 'turn:' + url;
+      }
+
+      // Only accept TURN/TURNS URLs.
+      if (!/^turns?:/i.test(url)) return [];
+
+      // Do not accept absurdly long URLs.
+      if (url.length > 300) return [];
+
+      const urls = [url];
+
+      // If it is normal TURN without explicit transport, also try TCP.
+      // This helps on VPNs, corporate networks, mobile networks and restrictive routers.
+      if (/^turn:/i.test(url) && !/[?&]transport=/i.test(url)) {
+        urls.push(url + '?transport=tcp');
+      }
+
+      return urls;
+    }
+
     function readRelayConfigFromForm() {
       const urls = String(el.relayUrlsInput.value || '')
-        .split(/[\n,]+/)
-        .map(url => url.trim())
-        .filter(Boolean);
+      .split(/[\n,]+/)
+      .flatMap(normalizeRelayUrlInput)
+      .filter(Boolean);
 
       const username = String(el.relayUsernameInput.value || '').trim();
       const credential = String(el.relayCredentialInput.value || '').trim();
@@ -1016,7 +1038,12 @@ footer {
           setStatus('connected', 'on');
         } else if (pc.connectionState === 'failed') {
           setStatus('failed', 'off');
-          log('connection failed. signaling worked, but this network may require a TURN relay. try another network.', 'bad');
+
+          if (mode === 'relay') {
+            log('connection failed in relay-only mode. TURN server did not return a working relay path. Check TURN URL, username, credential, quota, transport, VPN or firewall.', 'bad');
+          } else {
+            log('connection failed. signaling worked, but this network may require a TURN relay. try another network.', 'bad');
+          }
         } else if (pc.connectionState === 'disconnected') {
           setStatus('disconnected', 'off');
         } else if (pc.connectionState === 'closed') {
@@ -1220,6 +1247,10 @@ footer {
         await state.pc.setLocalDescription(offer);
         await waitForIceComplete(state.pc, ICE_WAIT_MS);
 
+        if (state.mode === 'relay') {
+          requireRelayCandidate(state.pc);
+        }
+
         state.safetyEnabled = el.useSafety.checked;
         const eraseSeconds = applyEraseSeconds(el.eraseSelect.value);
         const durationMinutes = applyDurationMinutes(el.durationSelect.value);
@@ -1342,6 +1373,10 @@ footer {
         await state.pc.setLocalDescription(answer);
         await waitForIceComplete(state.pc, ICE_WAIT_MS);
 
+        if (state.mode === 'relay') {
+          requireRelayCandidate(state.pc);
+        }
+
         const answerPayload = {
           app: APP_ID,
           version: VERSION,
@@ -1461,6 +1496,10 @@ footer {
         const offer = await state.pc.createOffer();
         await state.pc.setLocalDescription(offer);
         await waitForIceComplete(state.pc, ICE_WAIT_MS);
+
+        if (state.mode === 'relay') {
+          requireRelayCandidate(state.pc);
+        }
 
         state.safetyEnabled = el.useSafety.checked;
         const eraseSeconds = applyEraseSeconds(el.eraseSelect.value);
@@ -1645,6 +1684,10 @@ footer {
         const answer = await state.pc.createAnswer();
         await state.pc.setLocalDescription(answer);
         await waitForIceComplete(state.pc, ICE_WAIT_MS);
+
+        if (state.mode === 'relay') {
+          requireRelayCandidate(state.pc);
+        }
 
         const answerPayload = { app: APP_ID, version: VERSION, kind: 'answer', room: state.room, mode: state.mode, sdp: state.pc.localDescription.sdp };
         const encryptedAnswer = await encryptPayload(state.keyBytes, answerPayload);
@@ -2044,7 +2087,25 @@ footer {
         pc.addEventListener('icecandidate', candidate);
       });
     }
+    
+    function localDescriptionHasRelayCandidate(pc) {
+      const sdp = String(
+        pc &&
+        pc.localDescription &&
+        pc.localDescription.sdp
+          ? pc.localDescription.sdp
+          : ''
+      );
 
+      return / typ relay(\s|$)/.test(sdp);
+    }
+
+    function requireRelayCandidate(pc) {
+      if (!localDescriptionHasRelayCandidate(pc)) {
+        throw new Error('TURN did not return a relay candidate. Check TURN URL, username, credential, quota, transport, VPN or firewall.');
+      }
+    }
+    
     async function deriveKeyBytes(secretBytes, password) {
       // Turns (link secret + password) into the real encryption key.
       // PBKDF2 with 210,000 rounds makes guessing passwords very slow,
