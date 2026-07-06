@@ -10,8 +10,13 @@ The servers below implement the same RPC methods used by the app:
 - `gasGetAnswer`
 - `gasDeleteRoom`
 - `gasHealth`
+- `gasTorCreateRoom`
+- `gasTorJoinRoom`
+- `gasTorSend`
+- `gasTorPoll`
+- `gasTorDeleteRoom`
 
-Security model: the server only receives encrypted WebRTC setup blobs. It never receives the URL fragment secret `#k=...`, the password, or plaintext chat.
+Security model: in WebRTC mode, the server only receives encrypted setup blobs. In Tor Mode, the server also relays temporary end-to-end encrypted message blobs. The server never receives the URL fragment secret `#k=...`, the optional password, or plaintext chat text.
 
 ## Folders
 
