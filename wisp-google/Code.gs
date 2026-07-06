@@ -52,6 +52,10 @@ function gasCreateRoom(room, token, encryptedOffer) {
     var cache = CacheService.getScriptCache();
     var metaKey = key_(room, 'meta');
 
+    if (cache.get(key_(room, 'used'))) {
+      throw new Error('room already used.');
+    }
+
     if (cache.get(metaKey)) {
       throw new Error('room already exists. create a new room.');
     }
@@ -215,6 +219,8 @@ function gasTorJoinRoom(room, token) {
     // Mark that a second person has joined. A third join is refused.
     cache.put(key_(room, 'joined'), '1', ROOM_TTL_SECONDS);
 
+    refreshTorRoomTtl_(room);
+
     return { ok: true, ttl: ROOM_TTL_SECONDS };
   });
 }
@@ -245,6 +251,7 @@ function gasTorSend(room, token, box, encryptedBlob) {
     }
 
     cache.put(boxKey, JSON.stringify(list), ROOM_TTL_SECONDS);
+    refreshTorRoomTtl_(room);
     return { ok: true, seq: seq };
   });
 }
@@ -355,6 +362,29 @@ function validateAccess_(room, token) {
 
   if (meta.tokenHash !== tokenHash_(token)) {
     throw new Error('wrong room token.');
+  }
+}
+
+function refreshTorRoomTtl_(room) {
+  var cache = CacheService.getScriptCache();
+
+  var metaText = cache.get(key_(room, 'meta'));
+  if (metaText) {
+    cache.put(key_(room, 'meta'), metaText, ROOM_TTL_SECONDS);
+  }
+
+  if (cache.get(key_(room, 'joined'))) {
+    cache.put(key_(room, 'joined'), '1', ROOM_TTL_SECONDS);
+  }
+
+  var a2b = cache.get(key_(room, 'a2b'));
+  if (a2b) {
+    cache.put(key_(room, 'a2b'), a2b, ROOM_TTL_SECONDS);
+  }
+
+  var b2a = cache.get(key_(room, 'b2a'));
+  if (b2a) {
+    cache.put(key_(room, 'b2a'), b2a, ROOM_TTL_SECONDS);
   }
 }
 
