@@ -165,7 +165,7 @@ function gasDeleteRoom(room, token) {
 // ============================================================
 
 var TOR_MAX_MESSAGES = 10;           // live typing does not need long history
-var TOR_MAX_BLOB_CHARS = 8000;       // max size of one encrypted chat blob
+var TOR_MAX_BLOB_CHARS = 5000;       // max size of one encrypted chat blob
 
 function gasTorCreateRoom(room, token) {
   return withLock_(function () {
