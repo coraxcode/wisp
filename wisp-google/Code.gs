@@ -164,7 +164,7 @@ function gasDeleteRoom(room, token) {
 // Each room has two mailboxes: 'a2b' (creator -> joiner) and 'b2a'.
 // ============================================================
 
-var TOR_MAX_MESSAGES = 20;           // live typing does not need long history
+var TOR_MAX_MESSAGES = 10;           // live typing does not need long history
 var TOR_MAX_BLOB_CHARS = 8000;       // max size of one encrypted chat blob
 
 function gasTorCreateRoom(room, token) {
