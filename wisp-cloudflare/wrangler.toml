@@ -1,10 +1,11 @@
 name = "wisp-cloudflare"
 main = "worker.js"
-compatibility_date = "2026-07-05"
+compatibility_date = "2026-07-06"
 
 [assets]
 directory = "./public"
 binding = "ASSETS"
+not_found_handling = "single-page-application"
 
 [[durable_objects.bindings]]
 name = "WISP_ROOMS"
