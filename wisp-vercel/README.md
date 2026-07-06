@@ -1,29 +1,41 @@
-# Wisp multi-platform signaling
+# Wisp for Vercel + Upstash Redis
 
-This package keeps the browser app universal. The same `index.html` first uses Google Apps Script (`google.script.run`) when it exists; otherwise it calls `POST /__wisp_rpc`.
+This folder deploys the current Wisp browser app with WebRTC mode and Tor Mode.
 
-The servers below implement the same RPC methods used by the app:
+## Files
 
-- `gasCreateRoom`
-- `gasGetOffer`
-- `gasSetAnswer`
-- `gasGetAnswer`
-- `gasDeleteRoom`
-- `gasHealth`
+```txt
+index.html
+vercel.json
+api/__wisp_rpc.js
+```
 
-Security model: the server only receives encrypted WebRTC setup blobs. It never receives the URL fragment secret `#k=...`, the password, or plaintext chat.
+`index.html` automatically calls `POST /__wisp_rpc` when it is not running inside Google Apps Script. `vercel.json` rewrites `/__wisp_rpc` to the Vercel function.
 
-## Vercel version
+## Required environment variables
 
-Backend: `api/__wisp_rpc.js` using Upstash Redis / Vercel Redis-compatible REST credentials.
-Static page: `index.html`.
-Rewrite: `vercel.json` maps `/__wisp_rpc` to the API function.
-
-Required environment variables in Vercel:
+Create an Upstash Redis database, then add these Vercel environment variables:
 
 ```txt
 UPSTASH_REDIS_REST_URL
 UPSTASH_REDIS_REST_TOKEN
 ```
 
-Deploy this folder to Vercel after connecting an Upstash Redis database or equivalent Vercel Redis integration that provides those variables.
+## Deploy
+
+```bash
+vercel deploy
+```
+
+## Security model
+
+The server stores only encrypted setup blobs and, in Tor Mode, encrypted message blobs. It never receives the URL fragment secret `#k=...`, the optional password, or plaintext chat text.
+
+## Health check
+
+Open the site, then test:
+
+```txt
+POST /__wisp_rpc
+{ "method": "gasHealth", "args": [] }
+```
