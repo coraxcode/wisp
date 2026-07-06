@@ -612,6 +612,11 @@ footer {
           <span><strong style="color: var(--text)">Hide my IP address (relay-only).</strong> Routes the whole connection through a secure TURN relay, so the other person only ever sees the relay's IP, never yours. A little slower. Chat text stays end-to-end encrypted.</span>
         </label>
 
+        <label class="check">
+          <input id="useTor" type="checkbox" />
+          <span><strong style="color: var(--text)">Tor Browser Mode.</strong> Fully compatible with Tor Browser. WebRTC is disabled to prevent IP leaks. Encrypted messages. Slower, but highly private.</span>
+        </label>
+
         <div id="relayConfigBox" class="hidden" style="border: 1px dashed var(--line); border-radius: var(--radius-sm); padding: var(--s3); display: grid; gap: var(--s2); margin-top: var(--s2);">
           <p class="lead">
             <strong style="color: var(--text)">Relay is optional.</strong>
@@ -689,7 +694,7 @@ footer {
     <section id="viewChat" class="card chat hidden">
       <div class="chat-head">
         <div class="head-info">
-          <div class="peer"><span class="dot on"></span> direct channel · encrypted (DTLS) · live typing</div>
+          <div class="peer"><span class="dot on"></span> <span id="channelLabel">direct channel · encrypted (DTLS) · live typing</span></div>
           <div id="lifetimeBar" class="peer hidden"><span id="lifetimeDot" class="dot on"></span> <span id="lifetimeText"></span></div>
         </div>
         <div class="row"><button id="panicBtn" type="button" title="Instantly wipes everything and returns to the start screen">Panic</button><button id="clearMineBtn" type="button">Clear mine</button><button id="endBtn" class="ghost" type="button">End</button></div>
@@ -713,7 +718,7 @@ footer {
     </section>
 
     <footer>
-      Messages are not stored. For better anonymity, use a VPN + private/incognito window. Absolute anonymity is not guaranteed.
+        Messages are end-to-end encrypted. In WebRTC mode, chat text does not pass through the Wisp server; relay-only mode may route encrypted WebRTC packets through your TURN relay. In Tor Mode, encrypted message blobs pass through temporary server cache. For stronger network anonymity, use Tor Mode with Tor Browser or use a trusted VPN. Absolute anonymity is not guaranteed.
     </footer>
   </main>
 
@@ -726,6 +731,10 @@ footer {
     const ICE_WAIT_MS = 22000;
     const POLL_MS = 1500;
     const MAX_TEXT = 3000;
+    const TOR_POLL_MS = 1200;   // how often Tor mode checks the server for new messages
+    const TOR_SEND_THROTTLE_MS = 300; // avoid one HTTP request per keystroke
+    const TOR_PRESENCE_MS = 5000;
+    const TOR_PEER_TIMEOUT_MS = 16000;
     // These two are chosen by whoever creates the room, then shared with the other
     // side inside the encrypted offer, so BOTH browsers always use the same values.
     let CLEAR_DELAY_MS = 3000;              // 0 = never auto-erase; otherwise 1..10 seconds
@@ -736,9 +745,9 @@ footer {
 
     const $ = id => document.getElementById(id);
     const el = {
-      statusDot: $('statusDot'), statusText: $('statusText'), log: $('log'),
+      statusDot: $('statusDot'), statusText: $('statusText'), log: $('log'), channelLabel: $('channelLabel'),
       viewStart: $('viewStart'), viewShare: $('viewShare'), viewJoin: $('viewJoin'), viewChat: $('viewChat'),
-            createBtn: $('createBtn'), useStun: $('useStun'), useRelay: $('useRelay'),
+      createBtn: $('createBtn'), useStun: $('useStun'), useRelay: $('useRelay'), useTor: $('useTor'),
       relayConfigBox: $('relayConfigBox'), relayUrlsInput: $('relayUrlsInput'),
       relayUsernameInput: $('relayUsernameInput'), relayCredentialInput: $('relayCredentialInput'),
       applyRelayConfigBtn: $('applyRelayConfigBtn'), clearRelayConfigBtn: $('clearRelayConfigBtn'),
@@ -782,6 +791,20 @@ footer {
       lifetimeMinutes: 0,
       lifetimeDeadline: 0,
       lifetimeTick: null,
+      torMode: false,
+      torBox: 'a2b',
+      torReadBox: 'b2a',
+      torSeq: 0,
+      torPollTimer: null,
+      torSendChain: Promise.resolve(),
+      torTypingTimer: null,
+      torPendingTyping: null,
+      torLastTypingSentAt: 0,
+      torTypingFlushBusy: false,
+      torPresenceTimer: null,
+      torPeerLastSeenAt: 0,
+      torPeerLost: false,
+      torPendingJoin: false,
       manualMode: false,
       manualInvitePending: false,
       manualPendingOfferBlob: '',
@@ -811,7 +834,12 @@ footer {
       'gasSetAnswer',
       'gasGetAnswer',
       'gasDeleteRoom',
-      'gasHealth'
+      'gasHealth',
+      'gasTorCreateRoom',
+      'gasTorJoinRoom',
+      'gasTorSend',
+      'gasTorPoll',
+      'gasTorDeleteRoom'
     ]);
 
     const WISP_RPC_PATH = '/__wisp_rpc';
@@ -1100,7 +1128,150 @@ footer {
       channel.addEventListener('error', () => setStatus('channel error', 'off'));
     }
 
+    // ===== TOR TRANSPORT =====
+    // In Tor mode there is no DataChannel. send() writes an encrypted blob to the
+    // server mailbox; a polling loop reads the other mailbox and feeds handleMessage.
+
+    async function torSend(message) {
+      if (!state.torMode || !state.keyBytes) return false;
+      // Chain sends so blobs keep their order even if two are fired quickly.
+      state.torSendChain = state.torSendChain.then(async () => {
+        try {
+          const blob = await encryptPayload(state.keyBytes, message);
+          await server('gasTorSend', state.room, state.token, state.torBox, blob);
+        } catch (_) {}
+      });
+      return state.torSendChain.then(() => true).catch(() => false);
+    }
+
+    function startTorPolling() {
+      clearTimeout(state.torPollTimer);
+      let inFlight = false;
+      const tick = async () => {
+        if (!state.torMode) return;
+        if (!inFlight) {
+          inFlight = true;
+          try {
+            const res = await server('gasTorPoll', state.room, state.token, state.torReadBox, state.torSeq);
+            if (res && res.ok && Array.isArray(res.messages)) {
+              for (const item of res.messages) {
+                if (!item || typeof item.seq !== 'number') continue;
+                if (item.seq <= state.torSeq) continue;
+                state.torSeq = item.seq;
+                try {
+                  const msg = await decryptPayload(state.keyBytes, String(item.blob || ''));
+                  handleMessage(msg);
+                } catch (_) { /* not ours or corrupt: ignore */ }
+              }
+            }
+          } catch (_) {}
+          inFlight = false;
+        }
+        state.torPollTimer = setTimeout(tick, TOR_POLL_MS);
+      };
+      state.torPollTimer = setTimeout(tick, 300);
+    }
+
+    function stopTorPolling() {
+      clearTimeout(state.torPollTimer);
+      state.torPollTimer = null;
+    }
+
+    function markTorPeerAlive() {
+      if (state.torMode) {
+        state.torPeerLastSeenAt = Date.now();
+      }
+    }
+
+    function startTorPresence() {
+      if (!state.torMode || !state.connected) return;
+
+      stopTorPresence();
+
+      state.torPeerLost = false;
+      state.torPeerLastSeenAt = Date.now();
+
+      state.torPresenceTimer = setInterval(() => {
+        if (!state.torMode || !state.connected) return;
+
+        send({ type: 'ping', t: Date.now() });
+
+        if (Date.now() - state.torPeerLastSeenAt > TOR_PEER_TIMEOUT_MS) {
+          handleTorPeerLost();
+        }
+      }, TOR_PRESENCE_MS);
+
+      send({ type: 'ping', t: Date.now() });
+    }
+
+    function stopTorPresence() {
+      clearInterval(state.torPresenceTimer);
+      state.torPresenceTimer = null;
+      state.torPeerLastSeenAt = 0;
+      state.torPeerLost = false;
+    }
+
+    async function handleTorPeerLost() {
+      if (state.torPeerLost) return;
+
+      state.torPeerLost = true;
+
+      await endSession(false, true);
+
+      showView('viewStart');
+      setStatus('disconnected', 'off');
+      log('the other person disconnected or closed the tab. local screen wiped for privacy.', 'warn');
+    }
+
+    function scheduleTorTypingFlush() {
+      if (!state.torMode) return;
+
+      const now = Date.now();
+      const elapsed = now - (state.torLastTypingSentAt || 0);
+      const wait = Math.max(0, TOR_SEND_THROTTLE_MS - elapsed);
+
+      clearTimeout(state.torTypingTimer);
+      state.torTypingTimer = setTimeout(flushTorTyping, wait);
+    }
+
+    async function flushTorTyping() {
+      if (!state.torMode || !state.torPendingTyping || state.torTypingFlushBusy) return;
+
+      const message = state.torPendingTyping;
+      state.torPendingTyping = null;
+      state.torTypingFlushBusy = true;
+      state.torLastTypingSentAt = Date.now();
+
+      try {
+        await send(message);
+      } finally {
+        state.torTypingFlushBusy = false;
+
+        if (state.torPendingTyping) {
+          scheduleTorTypingFlush();
+        }
+      }
+    }
+
+    function openTorChatIfWaiting() {
+      if (!state.torMode) return;
+
+      state.connected = true;
+
+      if (el.viewChat && !el.viewChat.classList.contains('hidden')) {
+        return;
+      }
+
+      clearTimeout(state.watchdogTimer);
+      openChat();
+      showSafetyCode();
+      startLifetime();
+      resetIdleTimer();
+      setStatus('connected (Tor)', 'on');
+    }
+
     async function send(message) {
+      if (state.torMode) return torSend(message);
       // Defense in depth: every chat message is AES-GCM encrypted in the browser
       // BEFORE entering the DataChannel (which is itself DTLS encrypted).
       if (!state.dc || state.dc.readyState !== 'open' || !state.keyBytes) return false;
@@ -1114,9 +1285,20 @@ footer {
     function handleMessage(message) {
       if (!message || typeof message.type !== 'string') return;
 
+      if (state.torMode) {
+        markTorPeerAlive();
+      }
+
+      if (message.type === 'ping') {
+        return;
+      }
+
       if (message.type === 'end') {
-        endSession(false);
-        log('the other person ended the session.', 'warn');
+        endSession(false, true).then(() => {
+          showView('viewStart');
+          setStatus('disconnected', 'off');
+          log('the other person ended the session. local screen wiped for privacy.', 'warn');
+        });
         return;
       }
 
@@ -1126,12 +1308,19 @@ footer {
         return;
       }
 
-      // Do not accept chat/typing messages before the other side proves it runs the same code.
-      if (!state.peerVerified) return;
+      if (message.type === 'joined') {
+        openTorChatIfWaiting();
+        return;
+      }
+
+    // Do not accept chat/typing messages before the other side proves it runs the same code.
+    if (!state.peerVerified) return;
 
       resetIdleTimer();
 
       if (message.type === 'typing') {
+        openTorChatIfWaiting();
+
         const seq = Number.isSafeInteger(message.seq) ? message.seq : 0;
         if (seq < state.theirSeq) return;
         state.theirSeq = seq;
@@ -1223,6 +1412,8 @@ footer {
         return;
       }
 
+      el.createBtn.disabled = true;
+
       await endSession(false, true);
 
       state.manualMode = true;
@@ -1237,7 +1428,6 @@ footer {
 
       setStatus('creating manual invite…', 'busy');
       log('creating manual invite without Code.gs…');
-      el.createBtn.disabled = true;
 
       try {
         state.pc = makePeerConnection(state.mode);
@@ -1455,11 +1645,26 @@ footer {
     }
 
     async function createRoom() {
-      if (!window.RTCPeerConnection) { log('this browser does not support WebRTC.', 'bad'); return; }
-      if (!window.crypto || !crypto.subtle) { log('this browser does not support WebCrypto.', 'bad'); return; }
+      const wantsTorMode = !!(el.useTor && el.useTor.checked);
+
+      if (!window.crypto || !crypto.subtle) {
+        log('this browser does not support WebCrypto.', 'bad');
+        return;
+      }
+
+      if (!wantsTorMode && !window.RTCPeerConnection) {
+        log('this browser does not support WebRTC.', 'bad');
+        return;
+      }
 
       const wantsPassword = el.usePassword.checked;
       const password = String(el.passwordInput.value || '').trim();
+
+      if (wantsTorMode && wantsPassword) {
+        log('Password protection is not available in Tor Mode yet. Use the secret invite link, or use WebRTC/manual mode with password.', 'bad');
+        return;
+      }
+
       if (wantsPassword && !/^[A-Za-z0-9]{4,8}$/.test(password)) {
         log('password must be 4 to 8 letters or numbers.', 'bad');
         el.passwordInput.focus();
@@ -1472,18 +1677,61 @@ footer {
         return;
       }
 
+      el.createBtn.disabled = true;
+
       await endSession(false, true);
       if (el.manualReplyBox) el.manualReplyBox.classList.add('hidden');
       state.manualMode = false;
       state.manualInvitePending = false;
       state.manualPendingOfferBlob = '';
       state.isCreator = true;
-      state.mode = el.useRelay.checked ? 'relay' : (el.useStun.checked ? 'stun' : 'none');
+      state.torMode = wantsTorMode;
+      state.mode = state.torMode ? 'tor' : (el.useRelay.checked ? 'relay' : (el.useStun.checked ? 'stun' : 'none'));
       state.room = randomRoomId();
       state.token = randomToken(12);
       state.secretBytes = randomBytes(16);
       state.keyBytes = wantsPassword ? await deriveKeyBytes(state.secretBytes, password) : state.secretBytes;
       state.answerApplied = false;
+
+      if (state.torMode) {
+      setStatus('creating Tor room…', 'busy');
+      log('creating Tor room…');
+
+      // The creator writes to a2b and reads b2a.
+      state.torBox = 'a2b';
+      state.torReadBox = 'b2a';
+      state.torSeq = 0;
+
+      try {
+        await server('gasTorCreateRoom', state.room, state.token);
+      } catch (err) {
+        setStatus('error', 'off');
+        log('could not create Tor room: ' + errorText(err), 'bad');
+        endSession(false, true);
+        el.createBtn.disabled = false;
+        return;
+      }
+
+      state.safetyEnabled = false;
+      applyEraseSeconds(el.eraseSelect.value);
+      applyDurationMinutes(el.durationSelect.value);
+      state.lifetimeMinutes = applyLifetimeMinutes(el.lifetimeSelect ? el.lifetimeSelect.value : 0);
+
+      // This creates the invite link and shows the share screen.
+      buildTorLink(wantsPassword);
+
+      // Stay on the share screen until the other person opens the link.
+      state.peerVerified = true;
+      state.connected = false;
+
+      startTorPolling();
+
+      setStatus('waiting for the other person…', 'busy');
+      log('Tor room ready. send this link and keep this tab open. Chat opens when the other person enters.', 'ok');
+
+      el.createBtn.disabled = false;
+      return;
+    }
 
       setStatus('creating room…', 'busy');
       log('creating encrypted room…');
@@ -1570,6 +1818,49 @@ footer {
       });
     }
 
+    async function joinTorRoom() {
+      // Joiner writes to b2a and reads a2b (mirror of the creator).
+      state.torMode = true;
+      state.mode = 'tor';
+      state.isCreator = false;
+      state.torBox = 'b2a';
+      state.torReadBox = 'a2b';
+      state.torSeq = 0;
+      showView('viewJoin');
+      setStatus('joining…', 'busy');
+      log('opening Tor room…');
+      try {
+        const res = await server('gasTorJoinRoom', state.room, state.token);
+        if (res && res.used) {
+          showView('viewStart');
+          setStatus('room already used', 'off');
+          log('room already used. a wisp room connects only 2 people — ask for a new link.', 'bad');
+          return false;
+        }
+        if (!res || !res.ok) throw new Error((res && res.error) || 'could not join.');
+        state.safetyEnabled = false;
+        state.peerVerified = true;
+        state.connected = true;
+        startTorPolling();
+        openChat();
+        showSafetyCode();
+        startLifetime();
+        resetIdleTimer();
+
+        // Tell the creator that the second person entered.
+        // The creator will then leave the link screen and open the chat.
+        send({ type: 'joined' });
+
+        setStatus('connected (Tor)', 'on');
+        log('connected through Tor. messages relay encrypted through the server.', 'ok');
+        return true;
+      } catch (err) {
+        setStatus('error', 'off');
+        log('could not join Tor room: ' + errorText(err), 'bad');
+        return false;
+      }
+    }
+
     async function joinFromHashString(rawHash) {
       const clean = String(rawHash || '').replace(/^#/, '');
       const params = new URLSearchParams(clean);
@@ -1594,8 +1885,17 @@ footer {
         return false;
       }
 
-      if (!window.RTCPeerConnection) { log('this browser does not support WebRTC.', 'bad'); return false; }
-      if (!window.crypto || !crypto.subtle) { log('this browser does not support WebCrypto.', 'bad'); return false; }
+      const isTorInvite = params.get('x') === 'tor';
+
+      if (!window.crypto || !crypto.subtle) {
+        log('this browser does not support WebCrypto.', 'bad');
+        return false;
+      }
+
+      if (!isTorInvite && !window.RTCPeerConnection) {
+        log('this browser does not support WebRTC.', 'bad');
+        return false;
+      }
 
       await endSession(false, true);
       state.isCreator = false;
@@ -1605,6 +1905,7 @@ footer {
 
       if (params.get('p') === '1') {
         state.passwordPending = true;
+        state.torPendingJoin = (params.get('x') === 'tor');
         showView('viewPass');
         setStatus('password required', 'busy');
         log('this room is protected. enter the password to continue.');
@@ -1613,6 +1914,11 @@ footer {
       }
 
       state.keyBytes = state.secretBytes;
+
+      if (isTorInvite) {
+        return joinTorRoom();
+      }
+
       return performJoin();
     }
 
@@ -1633,7 +1939,18 @@ footer {
           return;
       }
 
+      if (state.torPendingJoin) { state.torPendingJoin = false; await joinTorRoom(); return; }
       await performJoin();
+    }
+
+    function buildTorLink(wantsPassword) {
+      const secret = bytesToBase64Url(state.secretBytes);
+      const unevaluated = WEB_APP_URL.indexOf('<' + '?') !== -1;
+      const baseUrl = (WEB_APP_URL && !unevaluated ? WEB_APP_URL : location.href.split('#')[0]);
+      state.linkValue = baseUrl + '#r=' + encodeURIComponent(state.room) + '&k=' + encodeURIComponent(secret) + '&t=' + encodeURIComponent(state.token) + '&x=tor' + (wantsPassword ? '&p=1' : '');
+      el.roomLink.value = state.linkValue;
+      revealLink(true);
+      showView('viewShare');
     }
 
     async function performJoin() {
@@ -1932,18 +2249,43 @@ footer {
       }, IDLE_LIMIT_MS);
     }
 
-    function openChat() {
-      cleanAddressBar();
-      showView('viewChat');
-      log('connected. type on the left — the other side sees it live.', 'ok');
-    }
+      function openChat() {
+        cleanAddressBar();
 
-    function sendTypingNow() {
+        if (el.channelLabel) {
+          if (state.torMode) {
+            el.channelLabel.textContent = 'server relay · end-to-end encrypted blobs · live typing';
+          } else if (state.mode === 'relay') {
+            el.channelLabel.textContent = 'TURN relay · encrypted WebRTC (DTLS) · live typing';
+          } else {
+            el.channelLabel.textContent = 'direct channel · encrypted WebRTC (DTLS) · live typing';
+          }
+        }
+
+        showView('viewChat');
+        log('connected. type on the left — the other side sees it live.', 'ok');
+
+        if (state.torMode) {
+          startTorPresence();
+        }
+      }
+
+      function sendTypingNow() {
       if (!state.connected || !state.peerVerified) return;
+
       const text = el.myText.value.slice(0, MAX_TEXT);
       if (el.myText.value !== text) el.myText.value = text;
+
       state.mySeq += 1;
-      send({ type: 'typing', seq: state.mySeq, text });
+      const message = { type: 'typing', seq: state.mySeq, text };
+
+      if (state.torMode) {
+        state.torPendingTyping = message;
+        scheduleTorTypingFlush();
+        return;
+      }
+
+      send(message);
     }
 
     function startMyClearTimer() {
@@ -1960,6 +2302,13 @@ footer {
 
     function clearMine() {
       clearTimeout(state.myClearTimer);
+
+      if (state.torMode) {
+        clearTimeout(state.torTypingTimer);
+        state.torTypingTimer = null;
+        state.torPendingTyping = null;
+      }
+
       el.myText.value = '';
       state.mySeq += 1;
       send({ type: 'clear', seq: state.mySeq });
@@ -1970,6 +2319,16 @@ footer {
     }
 
     async function notifyPeerEnd() {
+      if (state.torMode && state.keyBytes) {
+        try {
+          await send({ type: 'end' });
+          await sleep(180);
+          await send({ type: 'end' });
+          await sleep(180);
+        } catch (_) {}
+        return;
+      }
+
       if (!state.dc || state.dc.readyState !== 'open') return;
 
       try {
@@ -1994,10 +2353,25 @@ footer {
       clearTimeout(state.idleEndTimer);
       clearTimeout(state.helloTimer);
       clearInterval(state.lifetimeTick);
+      stopTorPolling();
+      stopTorPresence();
+      clearTimeout(state.torTypingTimer);
+      const wasTorMode = state.torMode;
+
+      if (wasTorMode && state.room && state.token && !notify) {
+        try {
+          await server('gasTorDeleteRoom', state.room, state.token);
+        } catch (_) {}
+      }
+
       try { if (state.dc) state.dc.close(); } catch (_) {}
       try { if (state.pc) state.pc.close(); } catch (_) {}
-      // best-effort: remove the encrypted room from the server cache right away
-      await tryCleanupRoom();
+
+      // best-effort: remove the encrypted WebRTC room from the server cache.
+      // Tor rooms are cleaned with gasTorDeleteRoom above.
+      if (!wasTorMode) {
+        await tryCleanupRoom();
+      }
       state.pc = null;
       state.dc = null;
       state.connected = false;
@@ -2012,6 +2386,19 @@ footer {
       state.lifetimeTick = null;
       state.lifetimeMinutes = 0;
       state.lifetimeDeadline = 0;
+      state.torMode = false;
+      state.torSeq = 0;
+      state.torBox = 'a2b';
+      state.torReadBox = 'b2a';
+      state.torSendChain = Promise.resolve();
+      state.torTypingTimer = null;
+      state.torPendingTyping = null;
+      state.torLastTypingSentAt = 0;
+      state.torTypingFlushBusy = false;
+      state.torPresenceTimer = null;
+      state.torPeerLastSeenAt = 0;
+      state.torPeerLost = false;
+      state.torPendingJoin = false;
       state.manualMode = false;
       state.manualInvitePending = false;
       state.manualPendingOfferBlob = '';
@@ -2235,7 +2622,21 @@ footer {
       return err && typeof err.message === 'string' ? err.message : String(err || 'unknown error');
     }
 
-     function syncRelayUi(restoreCompatibility) {
+    function syncRelayUi(restoreCompatibility) {
+      if (el.useTor && el.useTor.checked) {
+        el.useStun.checked = false;
+        el.useStun.disabled = true;
+
+        el.useRelay.checked = false;
+        el.useRelay.disabled = true;
+
+        if (el.relayConfigBox) {
+          el.relayConfigBox.classList.add('hidden');
+        }
+
+        return true;
+      }
+
       el.useRelay.disabled = false;
 
       const needsRelayDetails = el.useRelay.checked && !hasUsableRelayConfig();
@@ -2280,12 +2681,34 @@ footer {
       el.clearRelayConfigBtn.addEventListener('click', clearRuntimeRelayConfig);
     }
 
+    if (el.useTor) {
+      el.useTor.addEventListener('change', () => {
+        if (el.useTor.checked) {
+          el.useStun.checked = false;
+          el.useStun.disabled = true;
+          el.useRelay.checked = false;
+          el.useRelay.disabled = true;
+          if (el.useManualPairing) { el.useManualPairing.checked = false; el.useManualPairing.disabled = true; }
+          if (typeof syncRelayUi === 'function') syncRelayUi(true);
+          log('Tor Browser Mode: WebRTC is off. Messages relay encrypted through the server.', 'warn');
+        } else {
+          el.useStun.disabled = false;
+          el.useRelay.disabled = false;
+          if (el.useManualPairing) el.useManualPairing.disabled = false;
+          el.useStun.checked = true;
+        }
+      });
+    }
     el.createBtn.addEventListener('click', () => {
-      if (el.useManualPairing && el.useManualPairing.checked) {
-        createManualInvite();
-      } else {
-        createRoom();
-      }
+      const job = (el.useManualPairing && el.useManualPairing.checked)
+        ? createManualInvite()
+        : createRoom();
+
+      Promise.resolve(job).catch(err => {
+        setStatus('error', 'off');
+        log(errorText(err), 'bad');
+        el.createBtn.disabled = false;
+      });
     });
     el.usePassword.addEventListener('change', () => {
       el.passwordInput.classList.toggle('hidden', !el.usePassword.checked);
@@ -2348,7 +2771,24 @@ footer {
         log('press Esc again to wipe everything.', 'warn');
       }
     });
-    window.addEventListener('beforeunload', () => { try { if (state.dc && state.dc.readyState === 'open') state.dc.close(); } catch (_) {} try { if (state.pc) state.pc.close(); } catch (_) {} });
+    function bestEffortCloseOnExit() {
+      try {
+        if (state.torMode && state.connected && state.keyBytes) {
+          notifyPeerEnd();
+        }
+      } catch (_) {}
+
+      try {
+        if (state.dc && state.dc.readyState === 'open') state.dc.close();
+      } catch (_) {}
+
+      try {
+        if (state.pc) state.pc.close();
+      } catch (_) {}
+    }
+
+    window.addEventListener('pagehide', bestEffortCloseOnExit);
+    window.addEventListener('beforeunload', bestEffortCloseOnExit);
     
     syncRelayUi(false);
     setStatus('offline', 'idle');
