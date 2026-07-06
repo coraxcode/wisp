@@ -1,27 +1,29 @@
-# Wisp multi-platform signaling
+# Wisp for Deno Deploy + Deno KV
 
-This package keeps the browser app universal. The same `index.html` first uses Google Apps Script (`google.script.run`) when it exists; otherwise it calls `POST /__wisp_rpc`.
+This folder deploys the current Wisp browser app with WebRTC mode and Tor Mode.
 
-The servers below implement the same RPC methods used by the app:
+## Files
 
-- `gasCreateRoom`
-- `gasGetOffer`
-- `gasSetAnswer`
-- `gasGetAnswer`
-- `gasDeleteRoom`
-- `gasHealth`
+```txt
+index.html
+main.ts
+deno.json
+```
 
-Security model: the server only receives encrypted WebRTC setup blobs. It never receives the URL fragment secret `#k=...`, the password, or plaintext chat.
+`main.ts` serves the static page and handles `POST /__wisp_rpc` using Deno KV.
 
-## Deno Deploy version
-
-Backend: `main.ts` with Deno KV.
-Static page: `index.html`.
-
-Local test:
+## Local test
 
 ```bash
 deno task start
 ```
 
-Deploy this folder to Deno Deploy and attach/enable a Deno KV database for the project.
+Then open the local URL printed by Deno.
+
+## Deploy
+
+Deploy this folder to Deno Deploy and attach/enable Deno KV for the project.
+
+## Security model
+
+The server stores only encrypted setup blobs and, in Tor Mode, encrypted message blobs. It never receives the URL fragment secret `#k=...`, the optional password, or plaintext chat text.
