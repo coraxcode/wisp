@@ -37,6 +37,11 @@ It must not start with:
 
 Notes:
 
-- Apps Script stores only encrypted offer/answer data temporarily.
-- The chat messages travel through WebRTC DataChannel, not through Apps Script.
-- Some networks may require TURN relay. This free version uses STUN only.
+Notes:
+
+- In WebRTC mode, Apps Script stores only encrypted offer/answer setup data temporarily.
+- In WebRTC mode, chat text travels through WebRTC DataChannel and does not pass through Apps Script.
+- In Tor Mode, WebRTC is disabled and Apps Script relays only temporary end-to-end encrypted message blobs.
+- Manual Pairing can be used without sending setup data to Apps Script.
+- STUN is available for compatibility, and relay-only mode can use a user-provided TURN server.
+- Apps Script never receives the URL fragment secret `#k=...`, the optional password, or plaintext chat text.
