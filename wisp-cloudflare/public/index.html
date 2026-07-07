@@ -1075,6 +1075,7 @@ footer {
     const MAX_TEXT = 3000;
     const TOR_POLL_MS = 1200;   // how often Tor mode checks the server for new messages
     const TOR_SEND_THROTTLE_MS = 1000; // Tor mode sends after the user pauses typing
+    const TOR_GHOST_SEND_THROTTLE_MS = 250; // Ghost Mode sends faster, but still coalesces typing to avoid Apps Script overload
     const TOR_CLEAR_EXTRA_MS = 2500;   // extra time so Tor messages are delivered before local erase
     const TOR_PRESENCE_MS = 5000;
     const TOR_PEER_TIMEOUT_MS = 16000;
@@ -1779,13 +1780,14 @@ footer {
       log('the other person disconnected or closed the tab. local screen wiped for privacy.', 'warn');
     }
 
-    function scheduleTorTypingFlush() {
+    function scheduleTorTypingFlush(delayMs) {
       if (!state.torMode) return;
 
-      // Tor is slower by design. Debounce instead of live-sending every few keystrokes.
-      // This sends the final text after the user pauses typing.
+      // Tor is slower by design. Coalesce rapid typing into the latest visible text.
+      // This avoids flooding Apps Script/CacheService and keeps delivery stable.
       clearTimeout(state.torTypingTimer);
-      state.torTypingTimer = setTimeout(flushTorTyping, TOR_SEND_THROTTLE_MS);
+      const delay = Number.isFinite(Number(delayMs)) ? Math.max(0, Number(delayMs)) : TOR_SEND_THROTTLE_MS;
+      state.torTypingTimer = setTimeout(flushTorTyping, delay);
     }
 
     async function flushTorTyping() {
@@ -2292,11 +2294,10 @@ footer {
       const wantsPassword = el.usePassword.checked;
       const password = String(el.passwordInput.value || '').trim();
 
-      if (wantsTorMode && wantsPassword) {
-        log('Password protection is not available in Tor Mode yet. Use the secret invite link, or use WebRTC/manual mode with password.', 'bad');
-        return;
-      }
-
+      // Tor Mode can use the same password-derived key as WebRTC/manual mode.
+      // The invite link carries only p=1; the password itself never leaves the two browsers.
+      // If the wrong password is typed, the Tor hello/version check will fail because both
+      // sides derive different keys.
       if (wantsPassword && !/^[A-Za-z0-9]{4,8}$/.test(password)) {
         log('password must be 4 to 8 letters or numbers.', 'bad');
         el.passwordInput.focus();
@@ -3381,26 +3382,31 @@ footer {
       const text = el.myText.value.slice(0, MAX_TEXT);
       if (el.myText.value !== text) el.myText.value = text;
 
-      // Ghost Mode: if it's not my turn, don't send (I'm locked).
+      // Ghost Mode: if it is not my turn, do not send.
       if (state.ghostOn) {
         if (state.ghostFloor === 'theirs' && !state.ghostReplyReady) return;
         if (state.ghostFloor !== 'mine') {
-          // I'm starting a new message: claim the floor and pick my color.
           state.ghostMyColor = resolveMyGhostColor();
           setGhostFloor('mine');
         }
       }
 
       state.mySeq += 1;
-      const message = { type: 'typing', seq: state.mySeq, text };
-      if (state.ghostOn) { message.gc = state.ghostMyColor; message.gp = state.ghostPri; }
+      const message = { type: 'typing', seq: state.mySeq, text: text };
+      if (state.ghostOn) {
+        message.gc = state.ghostMyColor;
+        message.gp = state.ghostPri;
+      }
 
-      // Show my own text in my chosen Ghost color inside the shared box.
-      if (state.ghostOn) el.myText.style.color = state.ghostMyColor || '';
+      if (state.ghostOn) {
+        el.myText.style.color = state.ghostMyColor || '';
+      }
 
       if (state.torMode) {
+        // Do NOT send every keypress immediately through Apps Script.
+        // Keep only the latest text and flush it quickly in Ghost Mode.
         state.torPendingTyping = message;
-        scheduleTorTypingFlush();
+        scheduleTorTypingFlush(state.ghostOn ? TOR_GHOST_SEND_THROTTLE_MS : TOR_SEND_THROTTLE_MS);
         return;
       }
 
@@ -3432,21 +3438,36 @@ footer {
       }, REMOTE_CLEAR_FALLBACK_MS);
     }
 
-    function clearMine() {
+    async function clearMine() {
       clearTimeout(state.myClearTimer);
 
       if (state.torMode) {
         clearTimeout(state.torTypingTimer);
         state.torTypingTimer = null;
-        state.torPendingTyping = null;
+
+        // Before sending clear, make a best-effort drain of the latest pending text.
+        // This preserves the order: typing first, clear second.
+        for (let i = 0; i < 4; i += 1) {
+          if (state.torPendingTyping && !state.torTypingFlushBusy) {
+            await flushTorTyping();
+          }
+
+          try { await state.torSendChain; } catch (_) {}
+
+          if (!state.torPendingTyping && !state.torTypingFlushBusy) break;
+          await sleep(25);
+        }
       }
 
       el.myText.value = '';
-      if (state.ghostOn) { setGhostFloor('free'); el.myText.style.color = ''; }
+      if (state.ghostOn) {
+        setGhostFloor('free');
+        el.myText.style.color = '';
+      }
       applyMyTextLock();
       if (state.keyguardOn && state.keyguardAutoShuffle) keyguardShuffle();
       state.mySeq += 1;
-      send({ type: 'clear', seq: state.mySeq });
+      await send({ type: 'clear', seq: state.mySeq });
     }
 
     function sleep(ms) {
