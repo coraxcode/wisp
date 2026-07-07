@@ -1724,6 +1724,14 @@ footer {
         if (seq < state.theirSeq) return;
         state.theirSeq = seq;
 
+        // Self-heal: a Ghost message always carries "gp". If the other side is in
+        // Ghost but we somehow are not, switch on now so the text lands in the
+        // single visible box instead of the hidden one.
+        if (!state.ghostOn && message.gp !== undefined) {
+          state.ghostOn = true;
+          applyGhostChrome();
+        }
+
         if (state.ghostOn) {
           // Rare "both started at once": higher priority keeps the floor.
           const theirPri = Number(message.gp) || 0;
@@ -1745,7 +1753,7 @@ footer {
         if (seq < state.theirSeq) return;
         el.theirText.value = '';
         clearTimeout(state.theirClearTimer);
-        if (state.ghostOn) {
+        if (el.viewChat.classList.contains('ghost-on') || state.ghostOn) {
           // Their message ended: empty the shared box and let me type again.
           el.myText.value = '';
           el.myText.style.color = '';
