@@ -262,6 +262,21 @@ header {
 .lead { margin: 0; color: var(--muted); font-size: var(--fs-sm); }
 .lead strong { color: var(--text); font-weight: 700; }
 
+.chat-warning {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(4, 8, 6, .62);
+  padding: var(--s1) var(--s2);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: var(--phi);
+}
+
+.chat-warning strong {
+  color: var(--warn);
+  letter-spacing: .04em;
+}
+
 /* ------------------------------------------------------------
    INPUTS
    ------------------------------------------------------------ */
@@ -426,7 +441,117 @@ summary::-webkit-details-marker { display: none; }
   line-height: var(--phi);
 }
 
-/* yours: hot phosphor */
+#theirText:focus { border-color: var(--line); box-shadow: none; }
+
+/* ------------------------------------------------------------
+   GHOST MODE — one shared private box
+   ------------------------------------------------------------ */
+
+:root {
+  --ghost-gold: var(--accent);
+  --ghost-gold-soft: var(--text);
+  --ghost-gold-dim: var(--accent-dim);
+  --ghost-gold-line: rgba(52, 255, 136, .40);
+  --ghost-gold-glow: var(--accent-glow);
+}
+
+/* In Ghost Mode, the normal two-pane layout becomes one centered box. */
+.chat.ghost-on .panes {
+  grid-template-columns: 1fr;
+  max-width: 40rem;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* The first pane becomes the shared private box container. */
+.chat.ghost-on .pane:first-child {
+  position: relative;
+  display: grid;
+  gap: var(--s1);
+}
+
+/* The second pane still exists for compatibility, but is hidden visually. */
+.chat.ghost-on .pane:nth-child(2) {
+  display: none;
+}
+
+/* Hide labels/hints so screenshots do not reveal "you" or "them". */
+.chat.ghost-on .pane-label,
+.chat.ghost-on .pane .hint {
+  display: none;
+}
+
+/* The single visible box. */
+.chat.ghost-on #myText {
+  min-height: 12rem;
+  border: 1.5px solid var(--ghost-gold-line);
+  border-radius: var(--radius);
+  background:
+    radial-gradient(120% 120% at 50% 0%, var(--ghost-gold-dim), transparent 70%),
+    rgba(4, 8, 6, .92);
+  color: var(--ghost-gold-soft);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, .4),
+    0 0 22px -6px var(--ghost-gold-glow);
+  caret-color: var(--ghost-gold);
+  text-align: center;
+  resize: vertical;
+}
+
+.chat.ghost-on #myText::placeholder {
+  color: rgba(52, 255, 136, .35);
+}
+
+.chat.ghost-on #myText:focus {
+  border-color: var(--ghost-gold);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, .4),
+    0 0 30px -4px var(--ghost-gold-glow);
+}
+
+/* Tap-to-reply button shown only when the other side is idle and auto-erase is OFF. */
+.ghost-reply-hint {
+  position: absolute;
+  left: 50%;
+  bottom: var(--s1);
+  transform: translate(-50%, 6px);
+  width: max-content;
+  max-width: 90%;
+  padding: .3rem .8rem;
+  font-size: var(--fs-sm);
+  color: #050807;
+  background: var(--ghost-gold);
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 0 18px -4px var(--ghost-gold-glow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease, transform .2s ease;
+}
+
+.chat.ghost-on.ghost-can-reply .ghost-reply-hint {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+.ghost-swatch {
+  width: 2.2rem;
+  height: 2.2rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: none;
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .chat.ghost-on #myText {
+    min-height: 40vh;
+    font-size: 16px;
+  }
+}
+
 #myText {
   border-color: rgba(52, 255, 136, .4);
   box-shadow: inset 0 0 24px rgba(52, 255, 136, .04);
@@ -446,6 +571,114 @@ summary::-webkit-details-marker { display: none; }
 #theirText:focus { border-color: var(--line); box-shadow: none; }
 
 .pane .hint { font-size: var(--fs-xs); color: var(--dim); margin: 0; line-height: var(--phi); }
+
+/* ------------------------------------------------------------
+   KEYGUARD PAD — local shuffled on-screen keyboard
+   ------------------------------------------------------------ */
+.keyguard-box {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(4, 8, 6, .55);
+  padding: var(--s2);
+  display: grid;
+  gap: var(--s1);
+}
+
+.keyguard-head,
+.keyguard-tools,
+.keyguard-filters,
+.keyguard-pager,
+.keyguard-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s1);
+  flex-wrap: wrap;
+}
+
+.keyguard-head {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.keyguard-tools button,
+.keyguard-pager button,
+.keyguard-actions button {
+  flex: 0 0 auto;
+}
+
+.keyguard-mode.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 14px rgba(52, 255, 136, .14), inset 0 0 8px rgba(52, 255, 136, .05);
+}
+
+.keyguard-filters .check,
+.keyguard-auto {
+  margin: 0;
+  flex: 1 1 12rem;
+}
+
+.keyguard-keys {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(2.35rem, 1fr));
+  gap: .35rem;
+}
+
+.keyguard-keys.compact {
+  grid-template-columns: repeat(4, minmax(2.6rem, 1fr));
+}
+
+button.keyguard-key {
+  min-height: 2.35rem;
+  padding: .35rem .2rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+button.keyguard-key.wide { grid-column: span 2; }
+
+.keyguard-pager {
+  justify-content: center;
+  color: var(--dim);
+  font-size: var(--fs-xs);
+}
+
+#keyguardPageText {
+  min-width: 5rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.keyguard-draft {
+  min-height: 4.236rem;
+  resize: vertical;
+  color: var(--accent-soft);
+  background: rgba(4, 8, 6, .78);
+  border-style: dashed;
+}
+
+.keyguard-actions button {
+  flex: 0 0 auto;
+}
+
+#myText.keyguard-locked {
+  cursor: default;
+  border-color: var(--warn);
+  box-shadow: 0 0 0 3px rgba(255, 211, 92, .10), inset 0 0 24px rgba(255, 211, 92, .04);
+}
+
+@media (max-width: 700px) {
+  .keyguard-box { padding: var(--s1); }
+  .keyguard-keys { grid-template-columns: repeat(auto-fit, minmax(2.1rem, 1fr)); }
+  .keyguard-keys.compact { grid-template-columns: repeat(4, minmax(2.1rem, 1fr)); }
+  button.keyguard-key { min-height: 44px; }
+  .keyguard-tools button,
+  .keyguard-pager button,
+  .keyguard-actions button { flex: 1 1 6rem; }
+  .keyguard-filters .check,
+  .keyguard-auto { flex: 1 1 100%; }
+}
 
 /* ------------------------------------------------------------
    FOOTER
@@ -481,6 +714,29 @@ footer {
   button.ghost { flex: 0 0 auto; }
   .chat-head { flex-direction: column; align-items: stretch; }
   .chat-head .row { justify-content: flex-end; }
+
+  /* Mobile lifetime counter: keep it aligned with the channel status dot above. */
+  .chat-head .head-info {
+    align-items: flex-start;
+  }
+
+  #lifetimeBar {
+    width: auto;
+    max-width: 100%;
+    justify-content: flex-start;
+    align-items: center;
+    align-self: flex-start;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    text-align: left;
+  }
+
+  #lifetimeText {
+    white-space: nowrap;
+    font-size: var(--fs-sm);
+  }
+
   .brand { font-size: var(--fs-md); }
   body::before { background-size: 1.618rem 1.618rem; }
 }
@@ -514,6 +770,11 @@ footer {
     </header>
 
     <p id="log" class="log" aria-live="polite">ready. create a private room and send one link.</p>
+
+    <p id="siteWarning" class="chat-warning">
+      <strong>WARNING:</strong>
+      Wisp is a self-hosted private chat tool. By using it, you agree that you are solely responsible for what you send, receive, and share. Wisp does not intentionally store, review, moderate, or retain plaintext messages. In relay modes, temporary encrypted blobs may pass through server cache. User identities are not verified or displayed. Do not use Wisp for unlawful, harmful, abusive, threatening, exploitative, or non-consensual communications. Use at your own risk. To the maximum extent permitted by applicable law, the developer and host are not responsible for user-generated content, communications, misuse, loss, damages, or claims arising from use of this service.
+    </p>
 
     <section id="viewStart" class="card">
       <span class="step-label">start</span>
@@ -598,7 +859,15 @@ footer {
         <option value="60">60 minutes (1 hour)</option>
       </select>
     </label>
-      <div class="row"><button id="createBtn" class="primary" type="button">Create private room</button></div>
+      <label class="check">
+      <input id="riskAck" type="checkbox" />
+      <span>
+        <strong style="color: var(--text)">I understand and accept this warning.</strong>
+        I am responsible for my own use of this service.
+      </span>
+    </label>
+
+    <div class="row"><button id="createBtn" class="primary" type="button">Create private room</button></div>
       <details>
         <summary>received a link that didn't open? / options</summary>
         <p class="lead" style="margin-top: var(--s2)">If a room link didn't open automatically, paste the full link here.</p>
@@ -616,6 +885,24 @@ footer {
           <input id="useTor" type="checkbox" />
           <span><strong style="color: var(--text)">Tor Browser Mode.</strong> Fully compatible with Tor Browser. WebRTC is disabled to prevent IP leaks. Encrypted messages. Slower, but highly private.</span>
         </label>
+
+        <label class="check">
+          <input id="useGhost" type="checkbox" />
+          <span><strong style="color: var(--text)">Ghost Mode.</strong> One shared private box, one writer at a time. A screenshot does not show which side wrote the visible message. Works in every mode.</span>
+        </label>
+
+        <div id="ghostOptions" class="hidden" style="border: 1px dashed var(--ghost-gold-line); border-radius: var(--radius-sm); padding: var(--s3); display: grid; gap: var(--s2); margin-top: var(--s2);">
+          <label class="check" style="margin:0">
+            <input id="ghostRandom" type="checkbox" />
+            <span><strong style="color: var(--text)">Random colors.</strong> Each message gets a random color. Nobody can map a color to a person.</span>
+          </label>
+          <div id="ghostColorRow" class="row" style="gap: var(--s2); align-items:center; flex-wrap:wrap;">
+            <span class="hint" style="margin:0">Optional fixed message colors:</span>
+            <input id="ghostColor1" class="ghost-swatch" type="color" value="#d4f7dd" title="Color for the room creator" />
+            <input id="ghostColor2" class="ghost-swatch" type="color" value="#d4f7dd" title="Color for the guest" />
+          </div>
+          <p class="hint" style="margin:0">For maximum visual anonymity, leave random off and keep both colors identical.</p>
+        </div>
 
         <div id="relayConfigBox" class="hidden" style="border: 1px dashed var(--line); border-radius: var(--radius-sm); padding: var(--s3); display: grid; gap: var(--s2); margin-top: var(--s2);">
           <p class="lead">
@@ -703,12 +990,63 @@ footer {
         <strong style="color: var(--text)">Safety code: <span id="safetyCode" style="letter-spacing: .12em;"></span></strong><br />
         Ask the other person if they see the same safety code.
       </p>
+
+      <label class="check keyguard-toggle">
+        <input id="useKeyguard" type="checkbox" />
+        <span>
+          <strong style="color: var(--text)">KeyGuard Pad.</strong>
+          Local shuffled keypad with a private draft box. It blocks physical typing to reduce exposure to basic keyloggers.
+        </span>
+      </label>
+
+      <div id="keyguardBox" class="keyguard-box hidden">
+        <div class="keyguard-head">
+          <span>local draft — not sent until you press Send</span>
+          <button id="keyguardShuffleBtn" class="ghost" type="button">Shuffle</button>
+        </div>
+
+        <div class="keyguard-tools" aria-label="KeyGuard character groups">
+          <button id="keyguardLettersBtn" class="keyguard-mode active" type="button">Letters</button>
+          <button id="keyguardNumbersBtn" class="keyguard-mode" type="button">Numbers</button>
+          <button id="keyguardSymbolsBtn" class="keyguard-mode" type="button">Symbols</button>
+        </div>
+
+        <div class="keyguard-filters">
+          <label class="check"><input id="keyguardCompact" type="checkbox" /><span><strong style="color: var(--text)">4-key view.</strong> Show four keys at a time with arrows.</span></label>
+          <label class="check"><input id="keyguardLettersOnly" type="checkbox" checked /><span><strong style="color: var(--text)">Letters only.</strong></span></label>
+          <label class="check"><input id="keyguardNumbersOnly" type="checkbox" /><span><strong style="color: var(--text)">Numbers only.</strong></span></label>
+        </div>
+
+        <div id="keyguardPager" class="keyguard-pager hidden">
+          <button id="keyguardPrevBtn" type="button">‹</button>
+          <span id="keyguardPageText">1 / 1</span>
+          <button id="keyguardNextBtn" type="button">›</button>
+        </div>
+
+        <div id="keyguardKeys" class="keyguard-keys" aria-label="KeyGuard shuffled keyboard"></div>
+
+        <textarea id="keyguardDraft" class="keyguard-draft" readonly maxlength="3000" placeholder="KeyGuard draft appears here before sending..." spellcheck="false"></textarea>
+
+        <div class="keyguard-actions">
+          <label class="check keyguard-auto">
+            <input id="keyguardAutoShuffle" type="checkbox" />
+            <span><strong style="color: var(--text)">Auto shuffle.</strong> Shuffle every 45 seconds and after Send.</span>
+          </label>
+          <button id="keyguardClearBtn" class="ghost" type="button">Clear draft</button>
+          <button id="keyguardSendBtn" class="primary" type="button">Send draft</button>
+        </div>
+
+        <p class="hint">Includes letters, numbers, and common password symbols. Helps only against basic keystroke loggers. It does not protect compromised devices, screenshots, screen recording, extensions, or malware.</p>
+      </div>
+
       <div class="panes">
         <div class="pane">
           <span class="pane-label">you <span class="tag">seen live by the other side</span></span>
           <textarea id="myText" maxlength="3000" placeholder="type here — every keystroke is sent live…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+          <button id="ghostReplyHint" class="ghost-reply-hint" type="button">tap to reply</button>
           <p class="hint">your text follows the room's erase setting — on both screens.</p>
         </div>
+
         <div class="pane">
           <span class="pane-label">them <span class="tag">appears as they type</span></span>
           <textarea id="theirText" placeholder="their live text appears here…" readonly autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
@@ -726,13 +1064,14 @@ footer {
     'use strict';
 
     const APP_ID = 'wisp-gas-cache-live-chat';
-    const VERSION = 1;
+    const VERSION = 3;
     const WEB_APP_URL = '<?= webAppUrl ?>';
     const ICE_WAIT_MS = 22000;
     const POLL_MS = 1500;
     const MAX_TEXT = 3000;
     const TOR_POLL_MS = 1200;   // how often Tor mode checks the server for new messages
-    const TOR_SEND_THROTTLE_MS = 300; // avoid one HTTP request per keystroke
+    const TOR_SEND_THROTTLE_MS = 1000; // Tor mode sends after the user pauses typing
+    const TOR_CLEAR_EXTRA_MS = 2500;   // extra time so Tor messages are delivered before local erase
     const TOR_PRESENCE_MS = 5000;
     const TOR_PEER_TIMEOUT_MS = 16000;
     // These two are chosen by whoever creates the room, then shared with the other
@@ -747,7 +1086,14 @@ footer {
     const el = {
       statusDot: $('statusDot'), statusText: $('statusText'), log: $('log'), channelLabel: $('channelLabel'),
       viewStart: $('viewStart'), viewShare: $('viewShare'), viewJoin: $('viewJoin'), viewChat: $('viewChat'),
-      createBtn: $('createBtn'), useStun: $('useStun'), useRelay: $('useRelay'), useTor: $('useTor'),
+      createBtn: $('createBtn'), riskAck: $('riskAck'), useStun: $('useStun'), useRelay: $('useRelay'), useTor: $('useTor'),
+      useGhost: $('useGhost'), ghostOptions: $('ghostOptions'), ghostRandom: $('ghostRandom'),
+      ghostColor1: $('ghostColor1'), ghostColor2: $('ghostColor2'), ghostReplyHint: $('ghostReplyHint'),
+      useKeyguard: $('useKeyguard'), keyguardBox: $('keyguardBox'), keyguardKeys: $('keyguardKeys'), keyguardShuffleBtn: $('keyguardShuffleBtn'),
+      keyguardLettersBtn: $('keyguardLettersBtn'), keyguardNumbersBtn: $('keyguardNumbersBtn'), keyguardSymbolsBtn: $('keyguardSymbolsBtn'),
+      keyguardCompact: $('keyguardCompact'), keyguardLettersOnly: $('keyguardLettersOnly'), keyguardNumbersOnly: $('keyguardNumbersOnly'),
+      keyguardPager: $('keyguardPager'), keyguardPrevBtn: $('keyguardPrevBtn'), keyguardNextBtn: $('keyguardNextBtn'), keyguardPageText: $('keyguardPageText'),
+      keyguardDraft: $('keyguardDraft'), keyguardAutoShuffle: $('keyguardAutoShuffle'), keyguardClearBtn: $('keyguardClearBtn'), keyguardSendBtn: $('keyguardSendBtn'),
       relayConfigBox: $('relayConfigBox'), relayUrlsInput: $('relayUrlsInput'),
       relayUsernameInput: $('relayUsernameInput'), relayCredentialInput: $('relayCredentialInput'),
       applyRelayConfigBtn: $('applyRelayConfigBtn'), clearRelayConfigBtn: $('clearRelayConfigBtn'),
@@ -770,6 +1116,17 @@ footer {
       dc: null,
       connected: false,
       isCreator: false,
+
+      // ---- Ghost Mode state (all local; nothing new goes to the server) ----
+      ghostOn: false,          // is Ghost Mode active for this session?
+      ghostRandom: false,      // random color per message?
+      ghostColor1: '#d4f7dd',  // default = normal message color (same on both sides)
+      ghostColor2: '#d4f7dd',  // change one of them only if you WANT to distinguish sides
+      ghostFloor: 'free',      // 'free' | 'mine' | 'theirs' — whose turn it is
+      ghostMyColor: '',        // color chosen for my current message
+      ghostIdleTimer: null,    // detects the other side going quiet (3s takeover)
+      ghostReplyReady: false,  // may I take over now?
+      ghostPri: 0,             // random tiebreaker for the rare "both start at once"
       room: '',
       token: '',
       secretBytes: null,
@@ -782,6 +1139,10 @@ footer {
       theirClearTimer: null,
       watchdogTimer: null,
       keyBytes: null,
+      setupKeyBytes: null,
+      safetyKeyBytes: null,
+      ratchetRootBytes: null,
+      ratchet: null,
       passwordPending: false,
       safetyEnabled: true,
       linkValue: '',
@@ -809,7 +1170,16 @@ footer {
       manualInvitePending: false,
       manualPendingOfferBlob: '',
       peerVerified: false,
-      localClosing: false
+      localClosing: false,
+      keyguardOn: false,
+      keyguardKeys: [],
+      keyguardTimer: null,
+      keyguardDraft: '',
+      keyguardShift: false,
+      keyguardAutoShuffle: false,
+      keyguardMode: 'letters',
+      keyguardCompact: false,
+      keyguardPage: 0
     };
 
     function showView(name) {
@@ -1111,8 +1481,8 @@ footer {
       });
       channel.addEventListener('message', async event => {
         try {
-          const payload = await decryptPayload(state.keyBytes, String(event.data));
-          handleMessage(payload);
+          const decoded = await decryptTransportPayload(String(event.data));
+          await handleMessage(decoded.payload, decoded.header);
         } catch (_) { /* anything that does not open with our key is ignored */ }
       });
       channel.addEventListener('close', () => {
@@ -1137,7 +1507,7 @@ footer {
       // Chain sends so blobs keep their order even if two are fired quickly.
       state.torSendChain = state.torSendChain.then(async () => {
         try {
-          const blob = await encryptPayload(state.keyBytes, message);
+          const blob = await encryptTransportPayload(message);
           await server('gasTorSend', state.room, state.token, state.torBox, blob);
         } catch (_) {}
       });
@@ -1159,8 +1529,8 @@ footer {
                 if (item.seq <= state.torSeq) continue;
                 state.torSeq = item.seq;
                 try {
-                  const msg = await decryptPayload(state.keyBytes, String(item.blob || ''));
-                  handleMessage(msg);
+                  const decoded = await decryptTransportPayload(String(item.blob || ''));
+                  await handleMessage(decoded.payload, decoded.header);
                 } catch (_) { /* not ours or corrupt: ignore */ }
               }
             }
@@ -1226,12 +1596,10 @@ footer {
     function scheduleTorTypingFlush() {
       if (!state.torMode) return;
 
-      const now = Date.now();
-      const elapsed = now - (state.torLastTypingSentAt || 0);
-      const wait = Math.max(0, TOR_SEND_THROTTLE_MS - elapsed);
-
+      // Tor is slower by design. Debounce instead of live-sending every few keystrokes.
+      // This sends the final text after the user pauses typing.
       clearTimeout(state.torTypingTimer);
-      state.torTypingTimer = setTimeout(flushTorTyping, wait);
+      state.torTypingTimer = setTimeout(flushTorTyping, TOR_SEND_THROTTLE_MS);
     }
 
     async function flushTorTyping() {
@@ -1259,6 +1627,7 @@ footer {
       state.connected = true;
 
       if (el.viewChat && !el.viewChat.classList.contains('hidden')) {
+        ghostSyncIfCreator();
         return;
       }
 
@@ -1268,22 +1637,35 @@ footer {
       startLifetime();
       resetIdleTimer();
       setStatus('connected (Tor)', 'on');
+
+      el.myText.disabled = true;
+      el.myText.placeholder = 'verifying secure session...';
+
+      sendHello();
+      startHelloWatchdog();
     }
 
     async function send(message) {
       if (state.torMode) return torSend(message);
-      // Defense in depth: every chat message is AES-GCM encrypted in the browser
-      // BEFORE entering the DataChannel (which is itself DTLS encrypted).
+      // Defense in depth: every chat message is encrypted by Wisp's
+      // HKDF-separated ratchet layer BEFORE entering the WebRTC DataChannel
+      // (which is itself protected by DTLS).
       if (!state.dc || state.dc.readyState !== 'open' || !state.keyBytes) return false;
       try {
-        const blob = await encryptPayload(state.keyBytes, message);
+        const blob = await encryptTransportPayload(message);
         state.dc.send(blob);
         return true;
       } catch (_) { return false; }
     }
 
-    function handleMessage(message) {
+    async function handleMessage(message, transportHeader) {
       if (!message || typeof message.type !== 'string') return;
+
+      // Setup messages are allowed to use the HKDF-separated setup key.
+      // After setup, all control/chat messages must arrive through the ratcheted
+      // transport layer. This prevents a peer or injected blob from bypassing the
+      // per-message ratchet with an old non-ratcheted g1 payload.
+      if (!transportHeader && message.type !== 'hello') return;
 
       if (state.torMode) {
         markTorPeerAlive();
@@ -1303,8 +1685,13 @@ footer {
       }
 
       if (message.type === 'hello') {
+        // Accept exactly one setup hello. A later hello with a new DH key could
+        // reset the ratchet mid-session and desynchronize valid messages.
+        if (state.peerVerified) return;
+
         clearTimeout(state.helloTimer);
-        verifyPeerVersion(message);
+        await mixRatchetRemotePublic((transportHeader && transportHeader.dh) || message.dh || null);
+        await verifyPeerVersion(message);
         return;
       }
 
@@ -1313,10 +1700,22 @@ footer {
         return;
       }
 
-    // Do not accept chat/typing messages before the other side proves it runs the same code.
-    if (!state.peerVerified) return;
+      // Do not accept chat/typing messages before the other side proves it runs the same code.
+      if (!state.peerVerified) return;
 
       resetIdleTimer();
+
+      if (message.type === 'ghostSync') {
+        // Only the guest adopts the creator's Ghost settings.
+        if (!state.isCreator) {
+          state.ghostOn = !!message.on;
+          state.ghostRandom = !!message.random;
+          if (message.c1) state.ghostColor1 = String(message.c1).slice(0, 32);
+          if (message.c2) state.ghostColor2 = String(message.c2).slice(0, 32);
+          applyGhostChrome();
+        }
+        return;
+      }
 
       if (message.type === 'typing') {
         openTorChatIfWaiting();
@@ -1324,6 +1723,21 @@ footer {
         const seq = Number.isSafeInteger(message.seq) ? message.seq : 0;
         if (seq < state.theirSeq) return;
         state.theirSeq = seq;
+
+        if (state.ghostOn) {
+          // Rare "both started at once": higher priority keeps the floor.
+          const theirPri = Number(message.gp) || 0;
+          if (state.ghostFloor === 'mine' && el.myText.value && theirPri <= state.ghostPri) {
+            return; // I hold the floor; ignore their attempt until they yield
+          }
+          setGhostFloor('theirs');
+          ghostArmTakeover();
+          // Single golden box: show THEIR live text inside the shared box, read-only, in their color.
+          applyMyTextLock();
+          el.myText.style.color = String(message.gc || '') || '';
+          el.myText.value = String(message.text || '').slice(0, MAX_TEXT);
+        }
+
         el.theirText.value = String(message.text || '').slice(0, MAX_TEXT);
         startTheirClearFallback();
       } else if (message.type === 'clear') {
@@ -1331,6 +1745,13 @@ footer {
         if (seq < state.theirSeq) return;
         el.theirText.value = '';
         clearTimeout(state.theirClearTimer);
+        if (state.ghostOn) {
+          // Their message ended: empty the shared box and let me type again.
+          el.myText.value = '';
+          el.myText.style.color = '';
+          setGhostFloor('free');
+          applyMyTextLock();
+        }
       }
     }
 
@@ -1350,13 +1771,12 @@ footer {
       // Google Apps Script runs the page inside a sandboxed iframe.
       // This best-effort cleanup asks Apps Script to also remove the outer /exec hash.
       try {
-        if (
-          window.google &&
-          google.script &&
-          google.script.history &&
-          typeof google.script.history.replace === 'function'
-        ) {
-          google.script.history.replace({}, {}, '');
+        const gasHistory = window.google &&
+                   window.google.script &&
+                   window.google.script.history;
+
+        if (gasHistory && typeof gasHistory.replace === 'function') {
+          gasHistory.replace({}, {}, '');
         }
       } catch (_) {}
     }
@@ -1420,10 +1840,12 @@ footer {
       state.manualInvitePending = true;
       state.isCreator = true;
       state.mode = el.useRelay.checked ? 'relay' : (el.useStun.checked ? 'stun' : 'none');
+      loadGhostFromUi();
       state.room = '';
       state.token = '';
-      state.secretBytes = randomBytes(16);
+      state.secretBytes = randomBytes(32);
       state.keyBytes = wantsPassword ? await deriveKeyBytes(state.secretBytes, password) : state.secretBytes;
+      await deriveSessionKeys();
       state.answerApplied = false;
 
       setStatus('creating manual invite…', 'busy');
@@ -1456,10 +1878,11 @@ footer {
           erase: eraseSeconds,
           duration: durationMinutes,
           lifetime: state.lifetimeMinutes,
+          ghost: ghostPayload(),
           sdp: state.pc.localDescription.sdp
         };
 
-        const encryptedOffer = await encryptPayload(state.keyBytes, payload);
+        const encryptedOffer = await encryptSetupPayload(payload);
         const secret = bytesToBase64Url(state.secretBytes);
 
         state.linkValue = makeManualLink('offer', encryptedOffer, secret, wantsPassword);
@@ -1496,6 +1919,14 @@ footer {
         return false;
       }
 
+      let inviteSecretBytes;
+      try {
+        inviteSecretBytes = readInviteSecret(secret);
+      } catch (_) {
+        log('invalid manual invite link.', 'bad');
+        return false;
+      }
+
       await endSession(false, true);
 
       state.manualMode = true;
@@ -1503,7 +1934,7 @@ footer {
       state.isCreator = false;
       state.room = '';
       state.token = '';
-      state.secretBytes = base64UrlToBytes(secret);
+      state.secretBytes = inviteSecretBytes;
       state.manualPendingOfferBlob = encryptedOffer;
 
       if (params.get('p') === '1') {
@@ -1516,6 +1947,7 @@ footer {
       }
 
       state.keyBytes = state.secretBytes;
+      await deriveSessionKeys();
       return finishManualOffer(encryptedOffer);
     }
 
@@ -1525,7 +1957,7 @@ footer {
       log('opening manual invite and generating reply…');
 
       try {
-        const offerPayload = await decryptPayload(state.keyBytes, encryptedOffer);
+        const offerPayload = await decryptSetupPayload(encryptedOffer);
         validateManualSignalPayload(offerPayload, 'offer');
 
         state.mode = offerPayload.mode === 'none' ? 'none'
@@ -1540,6 +1972,14 @@ footer {
         applyEraseSeconds(offerPayload.erase);
         applyDurationMinutes(offerPayload.duration);
         state.lifetimeMinutes = applyLifetimeMinutes(offerPayload.lifetime);
+
+        applyGhostPayload(offerPayload.ghost);
+
+        if (el.useGhost) el.useGhost.checked = state.ghostOn;
+        if (el.ghostRandom) el.ghostRandom.checked = state.ghostRandom;
+        if (el.ghostColor1) el.ghostColor1.value = state.ghostColor1;
+        if (el.ghostColor2) el.ghostColor2.value = state.ghostColor2;
+        if (el.ghostOptions) el.ghostOptions.classList.toggle('hidden', !state.ghostOn);
 
         el.useSafety.checked = state.safetyEnabled;
         el.useStun.checked = state.mode === 'stun';
@@ -1575,7 +2015,7 @@ footer {
           sdp: state.pc.localDescription.sdp
         };
 
-        const encryptedAnswer = await encryptPayload(state.keyBytes, answerPayload);
+        const encryptedAnswer = await encryptSetupPayload(answerPayload);
 
         el.manualAnswerText.value = makeManualLink('answer', encryptedAnswer, '', false);
         state.manualPendingOfferBlob = '';
@@ -1625,7 +2065,7 @@ footer {
       log('applying manual reply…');
 
       try {
-        const answerPayload = await decryptPayload(state.keyBytes, encryptedAnswer);
+        const answerPayload = await decryptSetupPayload(encryptedAnswer);
         validateManualSignalPayload(answerPayload, 'answer');
 
         await state.pc.setRemoteDescription({ type: 'answer', sdp: answerPayload.sdp });
@@ -1689,9 +2129,12 @@ footer {
       state.mode = state.torMode ? 'tor' : (el.useRelay.checked ? 'relay' : (el.useStun.checked ? 'stun' : 'none'));
       state.room = randomRoomId();
       state.token = randomToken(12);
-      state.secretBytes = randomBytes(16);
+      state.secretBytes = randomBytes(32);
       state.keyBytes = wantsPassword ? await deriveKeyBytes(state.secretBytes, password) : state.secretBytes;
+      await deriveSessionKeys();
       state.answerApplied = false;
+
+      loadGhostFromUi();
 
       if (state.torMode) {
       setStatus('creating Tor room…', 'busy');
@@ -1721,7 +2164,8 @@ footer {
       buildTorLink(wantsPassword);
 
       // Stay on the share screen until the other person opens the link.
-      state.peerVerified = true;
+      // Do not mark the peer as verified yet; Tor Mode also requires hello/code verification.
+      state.peerVerified = false;
       state.connected = false;
 
       startTorPolling();
@@ -1764,9 +2208,10 @@ footer {
           erase: eraseSeconds,
           duration: durationMinutes,
           lifetime: state.lifetimeMinutes,
+          ghost: ghostPayload(),
           sdp: state.pc.localDescription.sdp
         };
-        const encryptedOffer = await encryptPayload(state.keyBytes, payload);
+        const encryptedOffer = await encryptSetupPayload(payload);
         await server('gasCreateRoom', state.room, state.token, encryptedOffer);
 
         const secret = bytesToBase64Url(state.secretBytes);
@@ -1804,8 +2249,12 @@ footer {
         let settled = false;
         const finish = value => { if (!settled) { settled = true; resolve(String(value || '')); } };
         try {
-          if (window.google && google.script && google.script.url && google.script.url.getLocation) {
-            google.script.url.getLocation(loc => {
+          const gasUrl = window.google &&
+               window.google.script &&
+               window.google.script.url;
+
+          if (gasUrl && typeof gasUrl.getLocation === 'function') {
+            gasUrl.getLocation(loc => {
               const h = loc && loc.hash ? String(loc.hash) : '';
               finish(h || (location.hash ? location.hash.slice(1) : ''));
             });
@@ -1839,10 +2288,14 @@ footer {
         }
         if (!res || !res.ok) throw new Error((res && res.error) || 'could not join.');
         state.safetyEnabled = false;
-        state.peerVerified = true;
+        state.peerVerified = false;
         state.connected = true;
+        state.ghostPri = Math.floor(Math.random() * 1e9);
+
         startTorPolling();
         openChat();
+        el.myText.disabled = true;
+        el.myText.placeholder = 'verifying secure session...';
         showSafetyCode();
         startLifetime();
         resetIdleTimer();
@@ -1850,6 +2303,8 @@ footer {
         // Tell the creator that the second person entered.
         // The creator will then leave the link screen and open the chat.
         send({ type: 'joined' });
+        sendHello();
+        startHelloWatchdog();
 
         setStatus('connected (Tor)', 'on');
         log('connected through Tor. messages relay encrypted through the server.', 'ok');
@@ -1897,11 +2352,19 @@ footer {
         return false;
       }
 
+      let inviteSecretBytes;
+      try {
+        inviteSecretBytes = readInviteSecret(secret);
+      } catch (_) {
+        log('invalid invite link.', 'bad');
+        return false;
+      }
+
       await endSession(false, true);
       state.isCreator = false;
       state.room = room;
       state.token = token;
-      state.secretBytes = base64UrlToBytes(secret);
+      state.secretBytes = inviteSecretBytes;
 
       if (params.get('p') === '1') {
         state.passwordPending = true;
@@ -1914,6 +2377,7 @@ footer {
       }
 
       state.keyBytes = state.secretBytes;
+      await deriveSessionKeys();
 
       if (isTorInvite) {
         return joinTorRoom();
@@ -1933,6 +2397,7 @@ footer {
       el.roomPassInput.value = '';
       setStatus('checking password…', 'busy');
       state.keyBytes = await deriveKeyBytes(state.secretBytes, password);
+      await deriveSessionKeys();
 
       if (state.manualPendingOfferBlob) {
           await finishManualOffer(state.manualPendingOfferBlob);
@@ -1967,7 +2432,7 @@ footer {
           return false;
         }
         if (!offerResult || !offerResult.ok || !offerResult.offer) throw new Error((offerResult && offerResult.error) || 'offer not found.');
-        const offerPayload = await decryptPayload(state.keyBytes, offerResult.offer);
+        const offerPayload = await decryptSetupPayload(offerResult.offer);
         validateSignalPayload(offerPayload, 'offer', state.room);
         state.mode = offerPayload.mode === 'none' ? 'none'
                    : (offerPayload.mode === 'relay' ? 'relay' : 'stun');
@@ -1981,6 +2446,15 @@ footer {
         applyEraseSeconds(offerPayload.erase);
         applyDurationMinutes(offerPayload.duration);
         state.lifetimeMinutes = applyLifetimeMinutes(offerPayload.lifetime);
+
+        applyGhostPayload(offerPayload.ghost);
+
+        if (el.useGhost) el.useGhost.checked = state.ghostOn;
+        if (el.ghostRandom) el.ghostRandom.checked = state.ghostRandom;
+        if (el.ghostColor1) el.ghostColor1.value = state.ghostColor1;
+        if (el.ghostColor2) el.ghostColor2.value = state.ghostColor2;
+        if (el.ghostOptions) el.ghostOptions.classList.toggle('hidden', !state.ghostOn);
+
         el.useSafety.checked = state.safetyEnabled;
         el.useStun.checked = state.mode === 'stun';
         el.useRelay.checked = state.mode === 'relay';
@@ -2007,7 +2481,7 @@ footer {
         }
 
         const answerPayload = { app: APP_ID, version: VERSION, kind: 'answer', room: state.room, mode: state.mode, sdp: state.pc.localDescription.sdp };
-        const encryptedAnswer = await encryptPayload(state.keyBytes, answerPayload);
+        const encryptedAnswer = await encryptSetupPayload(answerPayload);
         await server('gasSetAnswer', state.room, state.token, encryptedAnswer);
 
         setStatus('connecting…', 'busy');
@@ -2069,7 +2543,7 @@ footer {
 
       setStatus('connecting…', 'busy');
       log('reply received. opening direct channel…', 'ok');
-      const answerPayload = await decryptPayload(state.keyBytes, encryptedAnswer);
+      const answerPayload = await decryptSetupPayload(encryptedAnswer);
       validateSignalPayload(answerPayload, 'answer', state.room);
       await state.pc.setRemoteDescription({ type: 'answer', sdp: answerPayload.sdp });
       state.answerApplied = true;
@@ -2085,7 +2559,9 @@ footer {
       const remote = state.pc && state.pc.remoteDescription ? state.pc.remoteDescription.sdp : '';
       const fingerprints = sdp => (String(sdp).match(/a=fingerprint:[^\r\n]+/g) || []).join('|');
       const material = [fingerprints(local), fingerprints(remote)].sort().join('||');
-      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(material)));
+      const digest = state.safetyKeyBytes
+        ? await hmacSha256(state.safetyKeyBytes, 'safety-code|' + material)
+        : new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(material)));
       const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
       let code = '';
       for (let i = 0; i < 8; i += 1) code += ALPHABET[digest[i] % ALPHABET.length];
@@ -2118,9 +2594,34 @@ footer {
       return CODE_FINGERPRINT;
     }
 
+    async function sendSetupMessage(message) {
+      // Setup/control messages such as hello must not depend on the ratchet state.
+      // Otherwise a race can happen: one side may mix the peer's DH key before
+      // sending its own hello, causing the other side to be unable to decrypt it.
+      // These messages still use the HKDF-separated setup key.
+      try {
+        const blob = await encryptSetupPayload(message);
+
+        if (state.torMode) {
+          state.torSendChain = state.torSendChain.then(async () => {
+            await server('gasTorSend', state.room, state.token, state.torBox, blob);
+          });
+          await state.torSendChain;
+          return true;
+        }
+
+        if (!state.dc || state.dc.readyState !== 'open') return false;
+        state.dc.send(blob);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
     async function sendHello() {
       const fp = await ensureCodeFingerprint();
-      send({ type: 'hello', version: VERSION, fp: fp });
+      const dh = await getRatchetPublicJwk();
+      return sendSetupMessage({ type: 'hello', version: VERSION, fp: fp, dh: dh });
     }
 
     function startHelloWatchdog() {
@@ -2138,8 +2639,20 @@ footer {
       if (theirs && mine !== 'unavailable' && theirs === mine) {
         state.peerVerified = true;
         el.myText.disabled = false;
-        el.myText.placeholder = 'type here — every keystroke is sent live…';
-        el.myText.focus();
+        state.ghostPri = Math.floor(Math.random() * 1e9);
+        applyGhostChrome();
+        applyMyTextLock();
+
+        if (state.keyguardOn && el.keyguardDraft) {
+          el.myText.placeholder = 'KeyGuard Pad is active — use the private draft below.';
+          el.keyguardDraft.focus();
+        } else {
+          el.myText.placeholder = 'type here — every keystroke is sent live…';
+          el.myText.focus();
+        }
+
+        ghostSyncIfCreator();
+
         log('version check passed — both sides run the exact same code.', 'ok');
         return;
       }
@@ -2254,21 +2767,389 @@ footer {
 
         if (el.channelLabel) {
           if (state.torMode) {
-            el.channelLabel.textContent = 'server relay · end-to-end encrypted blobs · live typing';
+            el.channelLabel.textContent = state.ghostOn
+              ? 'Ghost Mode · encrypted server relay · one shared box'
+              : 'server relay · end-to-end encrypted blobs · live typing';
           } else if (state.mode === 'relay') {
-            el.channelLabel.textContent = 'TURN relay · encrypted WebRTC (DTLS) · live typing';
+            el.channelLabel.textContent = state.ghostOn
+              ? 'Ghost Mode · TURN relay · encrypted WebRTC'
+              : 'TURN relay · encrypted WebRTC (DTLS) · live typing';
           } else {
-            el.channelLabel.textContent = 'direct channel · encrypted WebRTC (DTLS) · live typing';
+              el.channelLabel.textContent = state.ghostOn
+              ? 'Ghost Mode · direct encrypted WebRTC · one shared box'
+              : 'direct channel · encrypted WebRTC (DTLS) · live typing';
           }
         }
 
         showView('viewChat');
-        log('connected. type on the left — the other side sees it live.', 'ok');
+        applyGhostChrome();
+        syncKeyguard();
+
+        if (state.ghostOn) {
+          log('connected in Ghost Mode. one shared box, one writer at a time.', 'ok');
+        } else {
+          log('connected. type on the left — the other side sees it live.', 'ok');
+        }
 
         if (state.torMode) {
           startTorPresence();
         }
       }
+
+      /* =========================================================
+       GHOST MODE CONTROLLER
+       A presentation + turn-taking layer over the existing
+       'typing' and 'clear' messages. Backend is never touched.
+       ========================================================= */
+
+    const GHOST_TAKEOVER_MS = 3000; // when erase = "never", other side may reply after 3s idle
+    const KEYGUARD_LOWER_KEYS = 'abcdefghijklmnopqrstuvwxyz'.split('');
+    const KEYGUARD_UPPER_KEYS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    const KEYGUARD_NUMBER_KEYS = '0123456789'.split('');
+    const KEYGUARD_SPECIAL_KEYS = ["!", "@", "#", "$", "%", "&", "*", "(", ")", "-", "_", "=", "+", "[", "]", "{", "}", ";", ":", ",", ".", "<", ">", "/", "?", "\\", "|", "`", "~", "^", "'", "\"", "´", "¨", "§", "°"];
+    const KEYGUARD_ROTATE_MS = 45000;
+    const KEYGUARD_PAGE_SIZE = 4;
+
+    function ghostReset() {
+      state.ghostFloor = 'free';
+      state.ghostMyColor = '';
+      state.ghostReplyReady = false;
+      clearTimeout(state.ghostIdleTimer);
+      state.ghostIdleTimer = null;
+      el.viewChat.classList.remove('ghost-can-reply');
+      el.viewChat.removeAttribute('data-ghost-floor');
+    }
+
+    // Turns the golden look on/off and refreshes the whole chat chrome.
+    function applyGhostChrome() {
+      el.viewChat.classList.toggle('ghost-on', !!state.ghostOn);
+      if (!state.ghostOn) { ghostReset(); applyMyTextLock(); return; }
+      setGhostFloor(state.ghostFloor);
+    }
+
+    function pickRandomGhostColor() {
+      const hue = Math.floor(Math.random() * 360);
+      return 'hsl(' + hue + ' 90% 68%)';
+    }
+
+    // The color MY outgoing message should use.
+    function resolveMyGhostColor() {
+      if (state.ghostRandom) return pickRandomGhostColor();
+      const c1 = state.ghostColor1, c2 = state.ghostColor2;
+      // creator = color1, guest = color2. If neither differs, it's the default look.
+      const mine = state.isCreator ? c1 : c2;
+      return mine || '';
+    }
+
+    function applyMyTextLock() {
+      const ghostLocked = state.ghostOn && state.ghostFloor === 'theirs' && !state.ghostReplyReady;
+      state.keyguardOn = !!(el.useKeyguard && el.useKeyguard.checked);
+      el.myText.readOnly = !!(ghostLocked || state.keyguardOn);
+      el.myText.classList.toggle('keyguard-locked', !!state.keyguardOn);
+
+      if (state.keyguardOn) {
+        el.myText.placeholder = 'KeyGuard Pad is active — compose below, then press Send draft.';
+      } else {
+        el.myText.placeholder = state.ghostOn
+          ? 'type here — one shared private box...'
+          : 'type here — every keystroke is sent live…';
+      }
+    }
+
+    function keyguardBaseKeys() {
+      if (state.keyguardMode === 'numbers') return KEYGUARD_NUMBER_KEYS.slice();
+      if (state.keyguardMode === 'symbols') return KEYGUARD_SPECIAL_KEYS.slice();
+      return (state.keyguardShift ? KEYGUARD_UPPER_KEYS : KEYGUARD_LOWER_KEYS).slice();
+    }
+
+    function keyguardUpdateModeUi() {
+      if (el.keyguardLettersBtn) el.keyguardLettersBtn.classList.toggle('active', state.keyguardMode === 'letters');
+      if (el.keyguardNumbersBtn) el.keyguardNumbersBtn.classList.toggle('active', state.keyguardMode === 'numbers');
+      if (el.keyguardSymbolsBtn) el.keyguardSymbolsBtn.classList.toggle('active', state.keyguardMode === 'symbols');
+      if (el.keyguardLettersOnly) el.keyguardLettersOnly.checked = state.keyguardMode === 'letters';
+      if (el.keyguardNumbersOnly) el.keyguardNumbersOnly.checked = state.keyguardMode === 'numbers';
+    }
+
+    function keyguardSetMode(mode) {
+      if (!['letters', 'numbers', 'symbols'].includes(mode)) mode = 'letters';
+      state.keyguardMode = mode;
+      state.keyguardPage = 0;
+      keyguardUpdateModeUi();
+      keyguardShuffle();
+    }
+
+    function keyguardShuffle() {
+      const keys = keyguardBaseKeys();
+      const rnd = new Uint32Array(keys.length);
+      crypto.getRandomValues(rnd);
+
+      for (let i = keys.length - 1; i > 0; i -= 1) {
+        const j = rnd[i] % (i + 1);
+        const tmp = keys[i];
+        keys[i] = keys[j];
+        keys[j] = tmp;
+      }
+
+      state.keyguardKeys = keys;
+      renderKeyguard();
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function escapeHtmlAttr(value) {
+      return escapeHtml(value);
+    }
+
+    function keyguardVisibleKeys() {
+      const full = state.keyguardKeys.length ? state.keyguardKeys : keyguardBaseKeys();
+      if (!state.keyguardCompact) return full;
+
+      const pages = Math.max(1, Math.ceil(full.length / KEYGUARD_PAGE_SIZE));
+      state.keyguardPage = ((state.keyguardPage % pages) + pages) % pages;
+      const start = state.keyguardPage * KEYGUARD_PAGE_SIZE;
+      return full.slice(start, start + KEYGUARD_PAGE_SIZE);
+    }
+
+    function renderKeyguard() {
+      if (!el.keyguardKeys) return;
+      const full = state.keyguardKeys.length ? state.keyguardKeys : keyguardBaseKeys();
+      const keys = keyguardVisibleKeys();
+      const pages = Math.max(1, Math.ceil(full.length / KEYGUARD_PAGE_SIZE));
+      const special = [
+        { key: 'shift', label: state.keyguardShift ? 'abc' : 'ABC', wide: true, show: state.keyguardMode === 'letters' },
+        { key: 'space', label: 'space', wide: true, show: true },
+        { key: 'backspace', label: '⌫', wide: true, show: true },
+        { key: 'enter', label: '↵', wide: true, show: true }
+      ].filter(k => k.show);
+
+      el.keyguardKeys.classList.toggle('compact', !!state.keyguardCompact);
+      if (el.keyguardPager) el.keyguardPager.classList.toggle('hidden', !state.keyguardCompact);
+      if (el.keyguardPageText) el.keyguardPageText.textContent = (state.keyguardPage + 1) + ' / ' + pages;
+
+      el.keyguardKeys.innerHTML = keys.map(k =>
+        '<button class="keyguard-key" type="button" data-key="' + escapeHtmlAttr(k) + '">' + escapeHtml(k) + '</button>'
+      ).join('') + special.map(k =>
+        '<button class="keyguard-key wide" type="button" data-key="' + k.key + '">' + k.label + '</button>'
+      ).join('');
+
+      keyguardUpdateModeUi();
+      keyguardUpdateDraft();
+    }
+
+    function keyguardUpdateDraft() {
+      if (el.keyguardDraft) el.keyguardDraft.value = state.keyguardDraft;
+      if (el.keyguardSendBtn) el.keyguardSendBtn.disabled = !state.keyguardDraft.trim();
+    }
+
+    function syncKeyguard() {
+      state.keyguardOn = !!(el.useKeyguard && el.useKeyguard.checked);
+      state.keyguardAutoShuffle = !!(el.keyguardAutoShuffle && el.keyguardAutoShuffle.checked);
+      state.keyguardCompact = !!(el.keyguardCompact && el.keyguardCompact.checked);
+
+      if (el.keyguardBox) el.keyguardBox.classList.toggle('hidden', !state.keyguardOn);
+
+      clearInterval(state.keyguardTimer);
+      state.keyguardTimer = null;
+
+      if (state.keyguardOn) {
+        if (!state.keyguardKeys.length) keyguardShuffle();
+        else renderKeyguard();
+        if (state.keyguardAutoShuffle) {
+          state.keyguardTimer = setInterval(keyguardShuffle, KEYGUARD_ROTATE_MS);
+        }
+      }
+
+      keyguardUpdateDraft();
+      applyMyTextLock();
+    }
+
+    function keyguardClearDraft() {
+      state.keyguardDraft = '';
+      keyguardUpdateDraft();
+    }
+
+    function keyguardPage(delta) {
+      const full = state.keyguardKeys.length ? state.keyguardKeys : keyguardBaseKeys();
+      const pages = Math.max(1, Math.ceil(full.length / KEYGUARD_PAGE_SIZE));
+      state.keyguardPage = (state.keyguardPage + delta + pages) % pages;
+      renderKeyguard();
+    }
+
+    function keyguardInsert(key) {
+      if (!state.keyguardOn || el.myText.disabled) return;
+      if (state.ghostOn && state.ghostFloor === 'theirs' && !state.ghostReplyReady) return;
+
+      if (key === 'shift') {
+        state.keyguardShift = !state.keyguardShift;
+        keyguardShuffle();
+        return;
+      }
+
+      let value = key;
+      if (key === 'space') value = ' ';
+      if (key === 'enter') value = '\n';
+
+      const box = el.keyguardDraft;
+      const current = state.keyguardDraft || '';
+      const start = box && typeof box.selectionStart === 'number' ? box.selectionStart : current.length;
+      const end = box && typeof box.selectionEnd === 'number' ? box.selectionEnd : start;
+
+      if (key === 'backspace') {
+        if (start !== end) {
+          state.keyguardDraft = current.slice(0, start) + current.slice(end);
+          keyguardUpdateDraft();
+          if (box) box.setSelectionRange(start, start);
+        } else if (start > 0) {
+          state.keyguardDraft = current.slice(0, start - 1) + current.slice(start);
+          keyguardUpdateDraft();
+          if (box) box.setSelectionRange(start - 1, start - 1);
+        }
+      } else {
+        state.keyguardDraft = (current.slice(0, start) + value + current.slice(end)).slice(0, MAX_TEXT);
+        keyguardUpdateDraft();
+        if (box) {
+          const pos = Math.min(start + value.length, state.keyguardDraft.length);
+          box.setSelectionRange(pos, pos);
+        }
+      }
+
+      try { if (box) box.focus({ preventScroll: true }); } catch (_) { if (box) box.focus(); }
+      resetIdleTimer();
+    }
+
+    function keyguardSendDraft() {
+      if (!state.keyguardOn || el.myText.disabled) return;
+      if (state.ghostOn && state.ghostFloor === 'theirs' && !state.ghostReplyReady) return;
+
+      const text = state.keyguardDraft.slice(0, MAX_TEXT);
+      if (!text.trim()) return;
+
+      el.myText.value = text;
+      sendTypingNow();
+      startMyClearTimer();
+      resetIdleTimer();
+      keyguardClearDraft();
+
+      if (state.keyguardAutoShuffle) {
+        keyguardShuffle();
+      }
+    }
+
+    function blockKeyguardPhysicalInput(event) {
+      if (!state.keyguardOn) return;
+      const allowed = ['Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+      if (event.ctrlKey || event.metaKey || event.altKey || allowed.includes(event.key)) return;
+      event.preventDefault();
+    }
+
+    function setGhostFloor(who) {
+      state.ghostFloor = who;
+      if (!state.ghostOn) return;
+
+      el.viewChat.setAttribute('data-ghost-floor', who);
+
+      // My input is only usable when the floor is free or mine.
+      applyMyTextLock();
+
+      // Show the "tap to reply" hint only when I'm allowed to take over.
+      el.viewChat.classList.toggle('ghost-can-reply', who === 'theirs' && state.ghostReplyReady);
+
+      if (who !== 'theirs') {
+        state.ghostReplyReady = false;
+        clearTimeout(state.ghostIdleTimer);
+        el.viewChat.classList.remove('ghost-can-reply');
+      }
+    }
+
+    // Called whenever the other side sends new text, to (re)arm the 3s takeover.
+    function ghostArmTakeover() {
+      if (!state.ghostOn) return;
+      state.ghostReplyReady = false;
+      el.viewChat.classList.remove('ghost-can-reply');
+      clearTimeout(state.ghostIdleTimer);
+      // Only offer takeover when auto-erase is OFF (messages don't vanish by themselves).
+      if (CLEAR_DELAY_MS > 0) return;
+      state.ghostIdleTimer = setTimeout(() => {
+        if (state.ghostOn && state.ghostFloor === 'theirs') {
+          state.ghostReplyReady = true;
+          el.viewChat.classList.add('ghost-can-reply');
+        }
+      }, GHOST_TAKEOVER_MS);
+    }
+
+    // I tap "reply": wipe their message here and take the floor to type.
+    function ghostTakeOver() {
+      if (!state.ghostOn || state.ghostFloor !== 'theirs' || !state.ghostReplyReady) return;
+
+      el.theirText.value = '';
+      el.myText.value = '';
+      el.myText.style.color = '';
+
+      setGhostFloor('free');
+      applyMyTextLock();
+
+      state.mySeq += 1;
+      send({ type: 'clear', seq: state.mySeq });
+
+      el.myText.focus();
+    }
+
+    function ghostSyncIfCreator() {
+      if (!state.ghostOn || !state.isCreator || !state.peerVerified) return;
+
+      send({
+        type: 'ghostSync',
+        on: true,
+        random: !!state.ghostRandom,
+        c1: state.ghostColor1,
+        c2: state.ghostColor2
+      });
+    }
+
+    // The creator tells the guest which Ghost settings to use (runs after both verify).
+    function safeGhostColor(value, fallback) {
+      const v = String(value || '').trim();
+      return /^#[0-9a-fA-F]{6}$/.test(v) ? v : fallback;
+    }
+
+    function loadGhostFromUi() {
+      state.ghostOn = !!(el.useGhost && el.useGhost.checked);
+      state.ghostRandom = !!(el.ghostRandom && el.ghostRandom.checked);
+      state.ghostColor1 = safeGhostColor(el.ghostColor1 && el.ghostColor1.value, '#d4f7dd');
+      state.ghostColor2 = safeGhostColor(el.ghostColor2 && el.ghostColor2.value, '#d4f7dd');
+      state.ghostPri = Math.floor(Math.random() * 1e9);
+
+      ghostReset();
+    }
+
+    function ghostPayload() {
+      return {
+        on: !!state.ghostOn,
+        random: !!state.ghostRandom,
+        c1: state.ghostColor1,
+        c2: state.ghostColor2
+      };
+    }
+
+    function applyGhostPayload(ghost) {
+      if (!ghost || typeof ghost !== 'object') {
+        state.ghostOn = false;
+        applyGhostChrome();
+        return;
+      }
+
+      state.ghostOn = !!ghost.on;
+      state.ghostRandom = !!ghost.random;
+      state.ghostColor1 = safeGhostColor(ghost.c1, '#d4f7dd');
+      state.ghostColor2 = safeGhostColor(ghost.c2, '#d4f7dd');
+      state.ghostPri = Math.floor(Math.random() * 1e9);
+
+      applyGhostChrome();
+    }
 
       function sendTypingNow() {
       if (!state.connected || !state.peerVerified) return;
@@ -2276,8 +3157,22 @@ footer {
       const text = el.myText.value.slice(0, MAX_TEXT);
       if (el.myText.value !== text) el.myText.value = text;
 
+      // Ghost Mode: if it's not my turn, don't send (I'm locked).
+      if (state.ghostOn) {
+        if (state.ghostFloor === 'theirs' && !state.ghostReplyReady) return;
+        if (state.ghostFloor !== 'mine') {
+          // I'm starting a new message: claim the floor and pick my color.
+          state.ghostMyColor = resolveMyGhostColor();
+          setGhostFloor('mine');
+        }
+      }
+
       state.mySeq += 1;
       const message = { type: 'typing', seq: state.mySeq, text };
+      if (state.ghostOn) { message.gc = state.ghostMyColor; message.gp = state.ghostPri; }
+
+      // Show my own text in my chosen Ghost color inside the shared box.
+      if (state.ghostOn) el.myText.style.color = state.ghostMyColor || '';
 
       if (state.torMode) {
         state.torPendingTyping = message;
@@ -2291,13 +3186,26 @@ footer {
     function startMyClearTimer() {
       clearTimeout(state.myClearTimer);
       if (CLEAR_DELAY_MS <= 0) return;
-      state.myClearTimer = setTimeout(() => clearMine(), CLEAR_DELAY_MS);
+
+      // In Tor Mode, give the final debounced message enough time to be sent and polled.
+      const extra = state.torMode ? TOR_CLEAR_EXTRA_MS : 0;
+      state.myClearTimer = setTimeout(() => clearMine(), CLEAR_DELAY_MS + extra);
     }
 
     function startTheirClearFallback() {
       clearTimeout(state.theirClearTimer);
       if (REMOTE_CLEAR_FALLBACK_MS <= 0) return;
-      state.theirClearTimer = setTimeout(() => { el.theirText.value = ''; }, REMOTE_CLEAR_FALLBACK_MS);
+
+      state.theirClearTimer = setTimeout(() => {
+        el.theirText.value = '';
+
+        if (state.ghostOn && state.ghostFloor === 'theirs') {
+          el.myText.value = '';
+          el.myText.style.color = '';
+          setGhostFloor('free');
+          applyMyTextLock();
+        }
+      }, REMOTE_CLEAR_FALLBACK_MS);
     }
 
     function clearMine() {
@@ -2310,6 +3218,9 @@ footer {
       }
 
       el.myText.value = '';
+      if (state.ghostOn) { setGhostFloor('free'); el.myText.style.color = ''; }
+      applyMyTextLock();
+      if (state.keyguardOn && state.keyguardAutoShuffle) keyguardShuffle();
       state.mySeq += 1;
       send({ type: 'clear', seq: state.mySeq });
     }
@@ -2420,12 +3331,43 @@ footer {
       state.token = '';
       state.secretBytes = null;
       state.keyBytes = null;
+      state.setupKeyBytes = null;
+      state.safetyKeyBytes = null;
+      state.ratchetRootBytes = null;
+      state.ratchet = null;
       state.passwordPending = false;
       state.peerVerified = false;
       el.myText.disabled = false;
       el.myText.placeholder = 'type here — every keystroke is sent live…';
       el.myText.value = '';
       el.theirText.value = '';
+      el.myText.style.color = '';
+      el.theirText.style.color = '';
+      if (el.useKeyguard) el.useKeyguard.checked = false;
+      if (el.keyguardAutoShuffle) el.keyguardAutoShuffle.checked = false;
+      if (el.keyguardCompact) el.keyguardCompact.checked = false;
+      if (el.keyguardLettersOnly) el.keyguardLettersOnly.checked = true;
+      if (el.keyguardNumbersOnly) el.keyguardNumbersOnly.checked = false;
+      state.keyguardOn = false;
+      state.keyguardAutoShuffle = false;
+      state.keyguardDraft = '';
+      state.keyguardShift = false;
+      state.keyguardMode = 'letters';
+      state.keyguardCompact = false;
+      state.keyguardPage = 0;
+      state.keyguardKeys = [];
+      clearInterval(state.keyguardTimer);
+      state.keyguardTimer = null;
+      if (el.keyguardBox) el.keyguardBox.classList.add('hidden');
+      if (el.keyguardPager) el.keyguardPager.classList.add('hidden');
+      if (el.keyguardDraft) el.keyguardDraft.value = '';
+      if (el.keyguardSendBtn) el.keyguardSendBtn.disabled = true;
+      keyguardUpdateModeUi();
+      el.myText.classList.remove('keyguard-locked');
+      el.myText.readOnly = false;
+      state.ghostOn = false;
+      ghostReset();
+      el.viewChat.classList.remove('ghost-on');
       el.roomLink.value = '';
       state.linkValue = '';
 
@@ -2493,6 +3435,252 @@ footer {
       }
     }
     
+
+    function utf8(value) {
+      return new TextEncoder().encode(String(value || ''));
+    }
+
+    function concatBytes(...parts) {
+      const arrays = parts.map(part => part instanceof Uint8Array ? part : new Uint8Array(part || []));
+      const total = arrays.reduce((sum, arr) => sum + arr.length, 0);
+      const out = new Uint8Array(total);
+      let offset = 0;
+      for (const arr of arrays) {
+        out.set(arr, offset);
+        offset += arr.length;
+      }
+      return out;
+    }
+
+    async function sha256Bytes(data) {
+      const input = data instanceof Uint8Array ? data : utf8(data);
+      return new Uint8Array(await crypto.subtle.digest('SHA-256', input));
+    }
+
+    async function hkdfBytes(inputKeyBytes, infoText, lengthBytes, saltBytes) {
+      const material = await crypto.subtle.importKey(
+        'raw',
+        inputKeyBytes,
+        { name: 'HKDF' },
+        false,
+        ['deriveBits']
+      );
+
+      const salt = saltBytes || await sha256Bytes('wisp-hkdf-salt-v3|' + APP_ID + '|' + state.room + '|' + state.token);
+      const info = utf8('wisp|' + APP_ID + '|v' + VERSION + '|' + String(infoText || ''));
+
+      const bits = await crypto.subtle.deriveBits(
+        { name: 'HKDF', hash: 'SHA-256', salt, info },
+        material,
+        lengthBytes * 8
+      );
+
+      return new Uint8Array(bits);
+    }
+
+    async function hmacSha256(keyBytes, dataText) {
+      const key = await crypto.subtle.importKey(
+        'raw',
+        keyBytes,
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign']
+      );
+      return new Uint8Array(await crypto.subtle.sign('HMAC', key, utf8(dataText)));
+    }
+
+    async function deriveSessionKeys() {
+      if (!state.keyBytes) throw new Error('missing master key.');
+      const salt = await sha256Bytes('wisp-session-salt-v3|' + state.room + '|' + state.token + '|' + bytesToBase64Url(state.secretBytes || new Uint8Array()));
+      state.setupKeyBytes = await hkdfBytes(state.keyBytes, 'setup-encryption-key', 32, salt);
+      state.safetyKeyBytes = await hkdfBytes(state.keyBytes, 'safety-code-key', 32, salt);
+      state.ratchetRootBytes = await hkdfBytes(state.keyBytes, 'transport-ratchet-root', 32, salt);
+      state.ratchet = null;
+    }
+
+    function getRatchetDirection() {
+      return state.isCreator ? { send: 'a2b', recv: 'b2a' } : { send: 'b2a', recv: 'a2b' };
+    }
+
+    function canonicalRatchetPublic(jwk) {
+      if (!jwk || !jwk.x || !jwk.y) return '';
+      return JSON.stringify({ crv: 'P-256', kty: 'EC', x: String(jwk.x), y: String(jwk.y) });
+    }
+
+    async function initRatchet() {
+      if (state.ratchet && state.ratchet.ready) return;
+      if (!state.ratchetRootBytes) await deriveSessionKeys();
+
+      const dir = getRatchetDirection();
+      const keyPair = await crypto.subtle.generateKey(
+        { name: 'ECDH', namedCurve: 'P-256' },
+        false,
+        ['deriveBits']
+      );
+      const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+      const salt = await sha256Bytes('wisp-ratchet-chain-salt-v3|' + state.room + '|' + state.token);
+
+      state.ratchet = {
+        ready: true,
+        rootKey: state.ratchetRootBytes,
+        localKeyPair: keyPair,
+        localPublicJwk: {
+          kty: 'EC',
+          crv: 'P-256',
+          x: publicJwk.x,
+          y: publicJwk.y
+        },
+        remotePublicText: '',
+        dhMixed: false,
+        sendDirection: dir.send,
+        recvDirection: dir.recv,
+        sendChain: await hkdfBytes(state.ratchetRootBytes, 'chain|' + dir.send, 32, salt),
+        recvChain: await hkdfBytes(state.ratchetRootBytes, 'chain|' + dir.recv, 32, salt),
+        sendSeq: 0,
+        recvSeq: 0
+      };
+    }
+
+    async function getRatchetPublicJwk() {
+      await initRatchet();
+      return state.ratchet.localPublicJwk;
+    }
+
+    async function mixRatchetRemotePublic(remoteJwk) {
+      if (!remoteJwk || !remoteJwk.x || !remoteJwk.y) return;
+      await initRatchet();
+
+      const remoteText = canonicalRatchetPublic(remoteJwk);
+      if (!remoteText || remoteText === state.ratchet.remotePublicText) return;
+
+      const remoteKey = await crypto.subtle.importKey(
+        'jwk',
+        { kty: 'EC', crv: 'P-256', x: String(remoteJwk.x), y: String(remoteJwk.y), ext: true },
+        { name: 'ECDH', namedCurve: 'P-256' },
+        false,
+        []
+      );
+
+      const shared = new Uint8Array(await crypto.subtle.deriveBits(
+        { name: 'ECDH', public: remoteKey },
+        state.ratchet.localKeyPair.privateKey,
+        256
+      ));
+
+      const orderedPubs = [canonicalRatchetPublic(state.ratchet.localPublicJwk), remoteText].sort().join('|');
+      const newRoot = await hkdfBytes(shared, 'dh-ratchet-root|' + orderedPubs, 32, state.ratchet.rootKey);
+      const salt = await sha256Bytes('wisp-dh-chain-salt-v3|' + orderedPubs);
+
+      state.ratchet.rootKey = newRoot;
+      state.ratchet.sendChain = await hkdfBytes(newRoot, 'chain|' + state.ratchet.sendDirection, 32, salt);
+      state.ratchet.recvChain = await hkdfBytes(newRoot, 'chain|' + state.ratchet.recvDirection, 32, salt);
+      state.ratchet.sendSeq = 0;
+      state.ratchet.recvSeq = 0;
+      state.ratchet.remotePublicText = remoteText;
+      state.ratchet.dhMixed = true;
+    }
+
+    async function ratchetStep(chainKey, purpose) {
+      const next = await hmacSha256(chainKey, 'wisp-ratchet-chain-next|' + purpose);
+      const msg = await hmacSha256(chainKey, 'wisp-ratchet-message-key|' + purpose);
+      return { nextChain: next, messageKey: msg };
+    }
+
+    async function aesGcmEncryptBytes(keyBytes, plaintextBytes, aadBytes) {
+      const iv = randomBytes(12);
+      const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt']);
+      const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aadBytes }, key, plaintextBytes);
+      return { iv, ciphertext: new Uint8Array(encrypted) };
+    }
+
+    async function aesGcmDecryptBytes(keyBytes, iv, ciphertext, aadBytes) {
+      const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
+      const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: aadBytes }, key, ciphertext);
+      return new Uint8Array(plain);
+    }
+
+    async function encryptTransportPayload(payload) {
+      await initRatchet();
+
+      const step = await ratchetStep(state.ratchet.sendChain, state.ratchet.sendDirection);
+      state.ratchet.sendChain = step.nextChain;
+      state.ratchet.sendSeq += 1;
+
+      const header = {
+        v: 1,
+        d: state.ratchet.sendDirection,
+        n: state.ratchet.sendSeq,
+        dh: state.ratchet.localPublicJwk
+      };
+
+      const headerB64 = bytesToBase64Url(utf8(JSON.stringify(header)));
+      const data = utf8(JSON.stringify(payload));
+      const encrypted = await aesGcmEncryptBytes(step.messageKey, data, utf8(headerB64));
+
+      return 'r1.' + headerB64 + '.' + bytesToBase64Url(encrypted.iv) + '.' + bytesToBase64Url(encrypted.ciphertext);
+    }
+
+    async function decryptTransportPayload(blob) {
+      const raw = String(blob || '');
+
+      // Legacy fallback for a peer that still sends old g1 payloads. Normal v3
+      // deployments use only r1 ratcheted payloads after setup.
+      if (!raw.startsWith('r1.')) {
+        const key = state.setupKeyBytes || state.keyBytes;
+        return { payload: await decryptPayload(key, raw), header: null };
+      }
+
+      await initRatchet();
+
+      const parts = raw.split('.');
+      if (parts.length !== 4) throw new Error('invalid ratchet payload.');
+      const header = JSON.parse(new TextDecoder().decode(base64UrlToBytes(parts[1])));
+
+      if (!header || header.v !== 1 || header.d !== state.ratchet.recvDirection) {
+        throw new Error('wrong ratchet direction.');
+      }
+
+      const seq = Number(header.n);
+      if (!Number.isSafeInteger(seq) || seq <= state.ratchet.recvSeq || seq - state.ratchet.recvSeq > 256) {
+        throw new Error('invalid ratchet sequence.');
+      }
+
+      // IMPORTANT: never mutate the receive chain until AES-GCM authentication
+      // succeeds. Otherwise one forged/corrupt blob could permanently desync
+      // the ratchet and make every later valid message undecryptable.
+      let trialChain = state.ratchet.recvChain;
+      let trialSeq = state.ratchet.recvSeq;
+      let messageKey = null;
+
+      while (trialSeq < seq) {
+        const step = await ratchetStep(trialChain, state.ratchet.recvDirection);
+        trialChain = step.nextChain;
+        trialSeq += 1;
+        messageKey = step.messageKey;
+      }
+
+      const iv = base64UrlToBytes(parts[2]);
+      const ciphertext = base64UrlToBytes(parts[3]);
+      const plain = await aesGcmDecryptBytes(messageKey, iv, ciphertext, utf8(parts[1]));
+      const payload = JSON.parse(new TextDecoder().decode(plain));
+
+      // Commit only after authentication and JSON parsing succeed.
+      state.ratchet.recvChain = trialChain;
+      state.ratchet.recvSeq = trialSeq;
+
+      return { payload, header };
+      }
+
+    async function encryptSetupPayload(payload) {
+      if (!state.setupKeyBytes) await deriveSessionKeys();
+      return encryptPayload(state.setupKeyBytes, payload);
+    }
+
+    async function decryptSetupPayload(blob) {
+      if (!state.setupKeyBytes) await deriveSessionKeys();
+      return decryptPayload(state.setupKeyBytes, blob);
+    }
+
     async function deriveKeyBytes(secretBytes, password) {
       // Turns (link secret + password) into the real encryption key.
       // PBKDF2 with 210,000 rounds makes guessing passwords very slow,
@@ -2507,7 +3695,7 @@ footer {
       const bits = await crypto.subtle.deriveBits(
         { name: 'PBKDF2', salt: secretBytes, iterations: 210000, hash: 'SHA-256' },
         material,
-        128
+        256
       );
       return new Uint8Array(bits);
     }
@@ -2569,6 +3757,12 @@ footer {
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
       return bytes;
+    }
+
+    function readInviteSecret(text) {
+      const secretBytes = base64UrlToBytes(text);
+      if (secretBytes.length !== 32) throw new Error('invalid invite secret.');
+      return secretBytes;
     }
 
     async function copyText(text) {
@@ -2700,6 +3894,11 @@ footer {
       });
     }
     el.createBtn.addEventListener('click', () => {
+      if (el.riskAck && !el.riskAck.checked) {
+        log('Please confirm the warning before creating a room.', 'bad');
+        return;
+      }
+
       const job = (el.useManualPairing && el.useManualPairing.checked)
         ? createManualInvite()
         : createRoom();
@@ -2741,6 +3940,41 @@ footer {
     el.cancelBtn.addEventListener('click', () => endSession(false));
     el.cancelBtn2.addEventListener('click', () => endSession(false));
     el.myText.addEventListener('input', () => { sendTypingNow(); startMyClearTimer(); resetIdleTimer(); });
+    el.myText.addEventListener('keydown', blockKeyguardPhysicalInput);
+    el.myText.addEventListener('beforeinput', event => { if (state.keyguardOn) event.preventDefault(); });
+    el.myText.addEventListener('paste', event => { if (state.keyguardOn) event.preventDefault(); });
+    el.myText.addEventListener('drop', event => { if (state.keyguardOn) event.preventDefault(); });
+    el.useKeyguard.addEventListener('change', syncKeyguard);
+    el.keyguardAutoShuffle.addEventListener('change', syncKeyguard);
+    el.keyguardCompact.addEventListener('change', () => { state.keyguardPage = 0; syncKeyguard(); });
+    el.keyguardLettersOnly.addEventListener('change', () => { if (el.keyguardLettersOnly.checked) keyguardSetMode('letters'); else syncKeyguard(); });
+    el.keyguardNumbersOnly.addEventListener('change', () => { if (el.keyguardNumbersOnly.checked) keyguardSetMode('numbers'); else syncKeyguard(); });
+    el.keyguardLettersBtn.addEventListener('click', () => keyguardSetMode('letters'));
+    el.keyguardNumbersBtn.addEventListener('click', () => keyguardSetMode('numbers'));
+    el.keyguardSymbolsBtn.addEventListener('click', () => keyguardSetMode('symbols'));
+    el.keyguardPrevBtn.addEventListener('click', () => keyguardPage(-1));
+    el.keyguardNextBtn.addEventListener('click', () => keyguardPage(1));
+    el.keyguardShuffleBtn.addEventListener('click', keyguardShuffle);
+    el.keyguardClearBtn.addEventListener('click', keyguardClearDraft);
+    el.keyguardSendBtn.addEventListener('click', keyguardSendDraft);
+    el.keyguardKeys.addEventListener('click', event => {
+      const button = event.target.closest('button[data-key]');
+      if (!button) return;
+      keyguardInsert(button.dataset.key || '');
+    });
+
+    // Ghost Mode: show/hide the color options when the toggle changes.
+    el.useGhost.addEventListener('change', () => {
+      el.ghostOptions.classList.toggle('hidden', !el.useGhost.checked);
+    });
+    // Random colors and fixed colors are mutually exclusive on screen (nicer UX).
+    el.ghostRandom.addEventListener('change', () => {
+      const on = el.ghostRandom.checked;
+      el.ghostColor1.disabled = on;
+      el.ghostColor2.disabled = on;
+    });
+    // Tap-to-reply button inside the golden box.
+    el.ghostReplyHint.addEventListener('click', ghostTakeOver);
     el.clearMineBtn.addEventListener('click', clearMine);
     el.endBtn.addEventListener('click', () => endSession(true));
     el.panicBtn.addEventListener('click', panicWipe);
