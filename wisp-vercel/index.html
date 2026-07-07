@@ -911,7 +911,7 @@ footer {
             If you create a relay room, these details are shared encrypted with the invitee so their browser can connect.
           </p>
 
-          <textarea id="relayUrlsInput" placeholder="TURN server, one per line. Examples:&#10;free.expressturn.com:3478&#10;turn:free.expressturn.com:3478&#10;turn:free.expressturn.com:3478?transport=tcp" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+          <textarea id="relayUrlsInput" placeholder="TURN server, one per line. Use a real TURN server with valid credentials. Examples:&#10;turn:your-turn.example.com:3478?transport=udp&#10;turn:your-turn.example.com:3478?transport=tcp&#10;turns:your-turn.example.com:5349?transport=tcp&#10;&#10;Do not use example hosts without a real username and credential." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
 
           <input id="relayUsernameInput" type="text" placeholder="TURN username" autocomplete="off"
             style="width: 100%; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(4, 8, 6, .85); color: var(--text); padding: var(--s1) var(--s2); font: inherit; font-size: 16px; outline: none;" />
@@ -1066,7 +1066,11 @@ footer {
     const APP_ID = 'wisp-gas-cache-live-chat';
     const VERSION = 3;
     const WEB_APP_URL = '<?= webAppUrl ?>';
-    const ICE_WAIT_MS = 22000;
+    const ICE_WAIT_MS = 30000;
+    const TURN_TEST_TIMEOUT_MS = 20000;
+    const HELLO_TIMEOUT_MS = 15000;
+    const TOR_HELLO_TIMEOUT_MS = 60000;
+    const TOR_HELLO_RETRY_MS = 3000;
     const POLL_MS = 1500;
     const MAX_TEXT = 3000;
     const TOR_POLL_MS = 1200;   // how often Tor mode checks the server for new messages
@@ -1149,6 +1153,7 @@ footer {
       idleWarnTimer: null,
       idleEndTimer: null,
       helloTimer: null,
+      helloRetryTimer: null,
       lifetimeMinutes: 0,
       lifetimeDeadline: 0,
       lifetimeTick: null,
@@ -1302,6 +1307,31 @@ footer {
     // Relay config received inside an invite. Used only to join that room.
     // It is NEVER re-shared in new invites and is wiped when the session ends.
     let inviteRelayIceServers = null;
+    let lastRelayIceError = '';
+
+    function relayIceErrorText(event) {
+      if (!event) return '';
+
+      const code = event.errorCode ? String(event.errorCode) : '';
+      const text = event.errorText ? String(event.errorText) : '';
+      const url = event.url ? String(event.url) : '';
+
+      let hint = '';
+
+      if (code === '701') {
+        hint = 'browser could not reach this TURN URL, or the TURN server did not return a relay candidate';
+      } else if (code === '401') {
+        hint = 'TURN authentication failed: username/credential is wrong, expired, missing, or does not belong to this TURN server';
+      } else if (code === '438') {
+        hint = 'TURN nonce expired: credentials may be stale; generate fresh TURN credentials';
+      } else if (code === '486') {
+        hint = 'TURN allocation quota reached: account/server quota may be exhausted';
+      } else if (code === '508') {
+        hint = 'TURN server has insufficient capacity or cannot allocate a relay address';
+      }
+
+      return [code, text, url, hint].filter(Boolean).join(' — ');
+    }
 
     function normalizeRelayIceServers(servers) {
       if (!Array.isArray(servers)) return [];
@@ -1356,7 +1386,7 @@ footer {
       url = url.replace(/\s+/g, '');
 
       // If the user pasted only host:port, assume normal TURN.
-      // Example: free.expressturn.com:3478 -> turn:free.expressturn.com:3478
+      // Example: relay.example.com:3478 -> turn:relay.example.com:3478
       if (!/^turns?:/i.test(url)) {
         url = 'turn:' + url;
       }
@@ -1367,12 +1397,29 @@ footer {
       // Do not accept absurdly long URLs.
       if (url.length > 300) return [];
 
-      const urls = [url];
+      const urls = [];
 
-      // If it is normal TURN without explicit transport, also try TCP.
-      // This helps on VPNs, corporate networks, mobile networks and restrictive routers.
-      if (/^turn:/i.test(url) && !/[?&]transport=/i.test(url)) {
-        urls.push(url + '?transport=tcp');
+      const add = value => {
+        const item = String(value || '').trim();
+        if (item && /^turns?:/i.test(item) && item.length <= 300 && !urls.includes(item)) {
+          urls.push(item);
+        }
+      };
+
+      const withTransport = (base, transport) => {
+        if (/[?&]transport=/i.test(base)) return base;
+        return base + (base.indexOf('?') === -1 ? '?' : '&') + 'transport=' + transport;
+      };
+
+      add(url);
+
+      // Be explicit. Some TURN providers/browsers behave better when UDP/TCP
+      // is written directly instead of relying on the browser default.
+      if (/^turn:/i.test(url)) {
+        add(withTransport(url, 'udp'));
+        add(withTransport(url, 'tcp'));
+      } else if (/^turns:/i.test(url)) {
+        add(withTransport(url, 'tcp'));
       }
 
       return urls;
@@ -1397,9 +1444,57 @@ footer {
       return servers;
     }
 
-    function applyRelayConfigFromForm() {
+    async function ensureRelayConfiguredBeforeConnect() {
+      if (!el.useRelay || !el.useRelay.checked) return true;
+
+      // Already tested and loaded by the "Use relay for this tab" button.
+      if (hasOwnRelayConfig()) return true;
+
+      const hasInlineDetails =
+        String(el.relayUrlsInput && el.relayUrlsInput.value || '').trim() &&
+        String(el.relayUsernameInput && el.relayUsernameInput.value || '').trim() &&
+        String(el.relayCredentialInput && el.relayCredentialInput.value || '').trim();
+
+      syncRelayUi(true);
+
+      if (!hasInlineDetails) {
+        log('relay-only is selected, but TURN details are missing. Enter a TURN server, username and credential, then click "Use relay for this tab" or create the room again.', 'bad');
+        setTimeout(() => {
+          if (el.relayUrlsInput) el.relayUrlsInput.focus();
+        }, 0);
+        return false;
+      }
+
       try {
-        runtimeRelayIceServers = readRelayConfigFromForm();
+        const servers = readRelayConfigFromForm();
+
+        log('Testing TURN relay before creating room...', 'warn');
+        const testedServers = await testRelayIceServers(servers);
+
+        runtimeRelayIceServers = testedServers;
+
+        // Clear visible secrets after the relay is safely loaded into memory.
+        el.relayUrlsInput.value = '';
+        el.relayUsernameInput.value = '';
+        el.relayCredentialInput.value = '';
+
+        syncRelayUi(true);
+        log('Relay config tested and loaded. Creating relay-only room...', 'ok');
+        return true;
+      } catch (err) {
+        log('Relay test failed: ' + errorText(err), 'bad');
+        return false;
+      }
+    }
+
+    async function applyRelayConfigFromForm() {
+      try {
+        const servers = readRelayConfigFromForm();
+
+        log('Testing TURN relay before using it...', 'warn');
+        const testedServers = await testRelayIceServers(servers);
+
+        runtimeRelayIceServers = testedServers;
 
         // Clear visible secrets from the form after loading them into memory.
         el.relayUrlsInput.value = '';
@@ -1407,9 +1502,9 @@ footer {
         el.relayCredentialInput.value = '';
 
         syncRelayUi(true);
-        log('Relay config loaded for this tab only. It was not saved.', 'ok');
+        log('Relay config tested and loaded for this tab only. It was not saved.', 'ok');
       } catch (err) {
-        log(errorText(err), 'bad');
+        log('Relay test failed: ' + errorText(err), 'bad');
       }
     }
 
@@ -1422,6 +1517,85 @@ footer {
 
       syncRelayUi(true);
       log('Relay config cleared from this tab.', 'warn');
+    }
+
+    async function testSingleRelayUrl(url, username, credential) {
+      lastRelayIceError = '';
+
+      return new Promise(async (resolve, reject) => {
+        const pc = new RTCPeerConnection({
+          iceServers: [{ urls: [url], username: username, credential: credential }],
+          iceTransportPolicy: 'relay',
+          iceCandidatePoolSize: 0
+        });
+
+        let finished = false;
+
+        const done = (ok, err) => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          try { pc.close(); } catch (_) {}
+          if (ok) resolve(true);
+          else reject(err || new Error('TURN did not return a relay candidate.'));
+        };
+
+        const timer = setTimeout(() => {
+          const detail = lastRelayIceError ? ' Last TURN error: ' + lastRelayIceError : '';
+          done(false, new Error('TURN test timed out without a relay candidate.' + detail));
+        }, TURN_TEST_TIMEOUT_MS);
+
+        pc.addEventListener('icecandidate', event => {
+          const candidate = event && event.candidate && event.candidate.candidate
+            ? String(event.candidate.candidate)
+            : '';
+
+          if (/ typ relay(\s|$)/.test(candidate)) {
+            done(true);
+          }
+        });
+
+        pc.addEventListener('icecandidateerror', event => {
+          lastRelayIceError = relayIceErrorText(event);
+        });
+
+        pc.addEventListener('icegatheringstatechange', () => {
+          if (pc.iceGatheringState === 'complete') {
+            const detail = lastRelayIceError ? ' Last TURN error: ' + lastRelayIceError : '';
+            setTimeout(() => done(false, new Error('TURN gathering completed without a relay candidate.' + detail)), 50);
+          }
+        });
+
+        try {
+          pc.createDataChannel('turn-test');
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+        } catch (err) {
+          done(false, err);
+        }
+      });
+    }
+
+    async function testRelayIceServers(servers) {
+      const relayServers = normalizeRelayIceServers(servers);
+      if (!relayServers.length) throw new Error('No valid TURN server was configured.');
+      if (!window.RTCPeerConnection) throw new Error('This browser does not support WebRTC.');
+
+      const failures = [];
+
+      for (const server of relayServers) {
+        const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+        for (const url of urls) {
+          try {
+            await testSingleRelayUrl(url, server.username, server.credential);
+            return [{ urls: [url], username: server.username, credential: server.credential }];
+          } catch (err) {
+            failures.push(url + ': ' + errorText(err));
+          }
+        }
+      }
+
+      throw new Error('No TURN URL returned a relay candidate. ' + failures.slice(0, 6).join(' | '));
     }
 
     function makePeerConnection(mode) {
@@ -1438,7 +1612,8 @@ footer {
           setStatus('failed', 'off');
 
           if (mode === 'relay') {
-            log('connection failed in relay-only mode. TURN server did not return a working relay path. Check TURN URL, username, credential, quota, transport, VPN or firewall.', 'bad');
+            const detail = lastRelayIceError ? ' Last TURN error: ' + lastRelayIceError : '';
+            log('connection failed in relay-only mode. TURN server did not return a working relay path. Check TURN URL, username, credential, quota, transport, VPN or firewall.' + detail, 'bad');
           } else {
             log('connection failed. signaling worked, but this network may require a TURN relay. try another network.', 'bad');
           }
@@ -1451,14 +1626,25 @@ footer {
         }
       });
       pc.addEventListener('iceconnectionstatechange', () => {
-      if (pc.iceConnectionState === 'failed') {
-        if (mode === 'relay') {
-          log('ICE failed. Check TURN server, username, credential, quota, or firewall.', 'bad');
-        } else {
-          log('ICE failed. Some networks may need TURN relay.', 'bad');
+        if (pc.iceConnectionState === 'failed') {
+          if (mode === 'relay') {
+            const detail = lastRelayIceError ? ' Last TURN error: ' + lastRelayIceError : '';
+            log('ICE failed. Check TURN server, username, credential, quota, transport, VPN or firewall.' + detail, 'bad');
+          } else {
+            log('ICE failed. Some networks may need TURN relay.', 'bad');
+          }
         }
-      }
-    });
+      });
+
+      pc.addEventListener('icecandidateerror', event => {
+        if (mode === 'relay') {
+          lastRelayIceError = relayIceErrorText(event);
+          if (lastRelayIceError) {
+            log('TURN candidate error: ' + lastRelayIceError, 'bad');
+          }
+        }
+      });
+
       pc.addEventListener('datachannel', event => setupDataChannel(event.channel));
       return pc;
     }
@@ -1621,7 +1807,7 @@ footer {
       }
     }
 
-    function openTorChatIfWaiting() {
+    async function openTorChatIfWaiting() {
       if (!state.torMode) return;
 
       state.connected = true;
@@ -1641,7 +1827,7 @@ footer {
       el.myText.disabled = true;
       el.myText.placeholder = 'verifying secure session...';
 
-      sendHello();
+      await sendHello();
       startHelloWatchdog();
     }
 
@@ -1696,7 +1882,7 @@ footer {
       }
 
       if (message.type === 'joined') {
-        openTorChatIfWaiting();
+        await openTorChatIfWaiting();
         return;
       }
 
@@ -1718,7 +1904,7 @@ footer {
       }
 
       if (message.type === 'typing') {
-        openTorChatIfWaiting();
+        await openTorChatIfWaiting();
 
         const seq = Number.isSafeInteger(message.seq) ? message.seq : 0;
         if (seq < state.theirSeq) return;
@@ -1834,9 +2020,7 @@ footer {
         return;
       }
 
-      if (el.useRelay.checked && !hasOwnRelayConfig()) {
-        log('relay-only is selected, but TURN username/credential were not configured.', 'bad');
-        syncRelayUi(true);
+      if (!(await ensureRelayConfiguredBeforeConnect())) {
         return;
       }
 
@@ -2119,9 +2303,7 @@ footer {
         return;
       }
 
-      if (el.useRelay.checked && !hasOwnRelayConfig()) {
-        log('relay-only is selected, but TURN username/credential were not configured.', 'bad');
-        syncRelayUi(true);
+      if (!(await ensureRelayConfiguredBeforeConnect())) {
         return;
       }
 
@@ -2310,8 +2492,8 @@ footer {
 
         // Tell the creator that the second person entered.
         // The creator will then leave the link screen and open the chat.
-        send({ type: 'joined' });
-        sendHello();
+        await send({ type: 'joined' });
+        await sendHello();
         startHelloWatchdog();
 
         setStatus('connected (Tor)', 'on');
@@ -2632,12 +2814,41 @@ footer {
       return sendSetupMessage({ type: 'hello', version: VERSION, fp: fp, dh: dh });
     }
 
+    function stopHelloRetry() {
+      clearInterval(state.helloRetryTimer);
+      state.helloRetryTimer = null;
+    }
+
     function startHelloWatchdog() {
       clearTimeout(state.helloTimer);
+      stopHelloRetry();
+
+      const wasTorMode = !!state.torMode;
+      const timeoutMs = wasTorMode ? TOR_HELLO_TIMEOUT_MS : HELLO_TIMEOUT_MS;
+
+      // Tor Mode depends on Apps Script polling/cache. A single setup message can
+      // be delayed or missed during heavy testing, so resend hello until the peer
+      // confirms the same code version. This does not resend chat text.
+      if (wasTorMode) {
+        state.helloRetryTimer = setInterval(() => {
+          if (state.peerVerified) {
+            stopHelloRetry();
+            return;
+          }
+          sendHello();
+        }, TOR_HELLO_RETRY_MS);
+      }
+
       state.helloTimer = setTimeout(async () => {
+        stopHelloRetry();
         await endSession(false);
-        log('session blocked: the other side did not confirm its code version. both must use the exact same deployment.', 'bad');
-      }, 10000);
+        log(
+          wasTorMode
+            ? 'session blocked: the other side did not confirm its code version in Tor Mode. both must use the exact same deployment, and Apps Script/CacheService must be responding.'
+            : 'session blocked: the other side did not confirm its code version. both must use the exact same deployment.',
+          'bad'
+        );
+      }, timeoutMs);
     }
 
     async function verifyPeerVersion(message) {
@@ -2645,6 +2856,10 @@ footer {
       const theirs = String(message.fp || '');
 
       if (theirs && mine !== 'unavailable' && theirs === mine) {
+        clearTimeout(state.helloTimer);
+        state.helloTimer = null;
+        stopHelloRetry();
+
         state.peerVerified = true;
         el.myText.disabled = false;
         state.ghostPri = Math.floor(Math.random() * 1e9);
@@ -2665,6 +2880,7 @@ footer {
         return;
       }
 
+      stopHelloRetry();
       await endSession(false);
       log('session blocked: the other side is running a DIFFERENT version of the code. both must use the exact same deployment.', 'bad');
     }
@@ -3271,6 +3487,7 @@ footer {
       clearTimeout(state.idleWarnTimer);
       clearTimeout(state.idleEndTimer);
       clearTimeout(state.helloTimer);
+      clearInterval(state.helloRetryTimer);
       clearInterval(state.lifetimeTick);
       stopTorPolling();
       stopTorPresence();
@@ -3302,6 +3519,7 @@ footer {
       state.idleWarnTimer = null;
       state.idleEndTimer = null;
       state.helloTimer = null;
+      state.helloRetryTimer = null;
       state.lifetimeTick = null;
       state.lifetimeMinutes = 0;
       state.lifetimeDeadline = 0;
