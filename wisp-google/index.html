@@ -1078,7 +1078,7 @@ footer {
     const TOR_GHOST_SEND_THROTTLE_MS = 250; // Ghost Mode sends faster, but still coalesces typing to avoid Apps Script overload
     const TOR_CLEAR_EXTRA_MS = 2500;   // extra time so Tor messages are delivered before local erase
     const TOR_PRESENCE_MS = 5000;
-    const TOR_PEER_TIMEOUT_MS = 16000;
+    const TOR_PEER_TIMEOUT_MS = 45000; // Tor/Apps Script can be slow; avoid false disconnects during setup
     // These two are chosen by whoever creates the room, then shared with the other
     // side inside the encrypted offer, so BOTH browsers always use the same values.
     let CLEAR_DELAY_MS = 3000;              // 0 = never auto-erase; otherwise 1..10 seconds
@@ -1747,7 +1747,7 @@ footer {
     }
 
     function startTorPresence() {
-      if (!state.torMode || !state.connected) return;
+      if (!state.torMode || !state.connected || !state.peerVerified) return;
 
       stopTorPresence();
 
@@ -1856,10 +1856,12 @@ footer {
       if (!message || typeof message.type !== 'string') return;
 
       // Setup messages are allowed to use the HKDF-separated setup key.
-      // After setup, all control/chat messages must arrive through the ratcheted
-      // transport layer. This prevents a peer or injected blob from bypassing the
-      // per-message ratchet with an old non-ratcheted g1 payload.
-      if (!transportHeader && message.type !== 'hello') return;
+      // After setup, all real chat/control messages must arrive through the
+      // transport layer. Tor's first "joined" notice is also setup-only so older
+      // Code.gs deployments that accept only g1 setup blobs can still open the
+      // creator screen. It contains no chat text.
+      const setupOnly = !transportHeader;
+      if (setupOnly && message.type !== 'hello' && message.type !== 'joined') return;
 
       if (state.torMode) {
         markTorPeerAlive();
@@ -2498,9 +2500,15 @@ footer {
         resetIdleTimer();
 
         // Tell the creator that the second person entered.
-        // The creator will then leave the link screen and open the chat.
-        await send({ type: 'joined' });
-        await sendHello();
+        // This first notice is a setup message (g1), not a transport message (r1).
+        // That avoids a false "disconnected" screen when Code.gs or CacheService
+        // rejects/delays the first r1 blob during Tor + password setup.
+        const joinedOk = await sendSetupMessage({ type: 'joined' });
+        if (!joinedOk) throw new Error('could not notify the creator that you joined.');
+
+        const helloOk = await sendHello();
+        if (!helloOk) throw new Error('could not start secure verification.');
+
         startHelloWatchdog();
 
         setStatus('connected (Tor)', 'on');
@@ -2883,6 +2891,11 @@ footer {
 
         ghostSyncIfCreator();
 
+        if (state.torMode) {
+          markTorPeerAlive();
+          startTorPresence();
+        }
+
         log('version check passed — both sides run the exact same code.', 'ok');
         return;
       }
@@ -3022,9 +3035,9 @@ footer {
           log('connected. type on the left — the other side sees it live.', 'ok');
         }
 
-        if (state.torMode) {
-          startTorPresence();
-        }
+        // Tor presence must start only after the hello/version check.
+        // Starting it here can falsely wipe the screen while the password/Tor
+        // handshake is still opening.
       }
 
       /* =========================================================
