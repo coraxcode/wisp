@@ -2016,6 +2016,12 @@ footer {
     }
 
     async function createManualInvite() {
+      if (el.useTor && el.useTor.checked) {
+        syncManualPairingUi();
+        log('Manual pairing is not available in Tor Browser Mode. Tor Mode disables WebRTC and uses the encrypted server relay.', 'bad');
+        return;
+      }
+
       if (!window.RTCPeerConnection) { log('this browser does not support WebRTC.', 'bad'); return; }
       if (!window.crypto || !crypto.subtle) { log('this browser does not support WebCrypto.', 'bad'); return; }
 
@@ -4070,7 +4076,25 @@ footer {
       return err && typeof err.message === 'string' ? err.message : String(err || 'unknown error');
     }
 
+    function syncManualPairingUi() {
+      if (!el.useManualPairing) return;
+
+      const torActive = !!(el.useTor && el.useTor.checked);
+
+      if (torActive) {
+        el.useManualPairing.checked = false;
+        el.useManualPairing.disabled = true;
+        el.useManualPairing.title = 'Manual pairing is not available in Tor Browser Mode.';
+        return;
+      }
+
+      el.useManualPairing.disabled = false;
+      el.useManualPairing.removeAttribute('title');
+    }
+
     function syncRelayUi(restoreCompatibility) {
+      syncManualPairingUi();
+
       if (el.useTor && el.useTor.checked) {
         el.useStun.checked = false;
         el.useStun.disabled = true;
@@ -4131,22 +4155,15 @@ footer {
 
     if (el.useTor) {
       el.useTor.addEventListener('change', () => {
+        syncRelayUi(true);
+
         if (el.useTor.checked) {
-          el.useStun.checked = false;
-          el.useStun.disabled = true;
-          el.useRelay.checked = false;
-          el.useRelay.disabled = true;
-          if (el.useManualPairing) { el.useManualPairing.checked = false; el.useManualPairing.disabled = true; }
-          if (typeof syncRelayUi === 'function') syncRelayUi(true);
           log('Tor Browser Mode: WebRTC is off. Messages relay encrypted through the server.', 'warn');
-        } else {
-          el.useStun.disabled = false;
-          el.useRelay.disabled = false;
-          if (el.useManualPairing) el.useManualPairing.disabled = false;
-          el.useStun.checked = true;
         }
       });
     }
+
+    syncRelayUi(false);
     el.createBtn.addEventListener('click', () => {
       if (el.riskAck && !el.riskAck.checked) {
         log('Please confirm the warning before creating a room.', 'bad');
