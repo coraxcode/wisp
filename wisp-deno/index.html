@@ -1147,6 +1147,9 @@ footer {
       setupKeyBytes: null,
       safetyKeyBytes: null,
       ratchetRootBytes: null,
+      transportKeyBytes: null,
+      transportSendSeq: 0,
+      transportRecvSeq: 0,
       ratchet: null,
       passwordPending: false,
       safetyEnabled: true,
@@ -1370,8 +1373,11 @@ footer {
 
     function getIceServers(mode) {
       if (mode === 'relay') return getConfiguredRelayIceServers();
-      if (mode === 'stun') return [{ urls: 'stun:stun.l.google.com:19302' }];
-      return [];
+      // Both "stun" and "none" get STUN so the connection can traverse normal NAT.
+      return [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ];
     }
 
     function hasUsableRelayConfig() {
@@ -1784,7 +1790,7 @@ footer {
       if (!state.torMode) return;
 
       // Tor is slower by design. Coalesce rapid typing into the latest visible text.
-      // This avoids flooding Apps Script/CacheService and keeps delivery stable.
+      // Ghost Mode uses a shorter delay, but still avoids flooding Apps Script.
       clearTimeout(state.torTypingTimer);
       const delay = Number.isFinite(Number(delayMs)) ? Math.max(0, Number(delayMs)) : TOR_SEND_THROTTLE_MS;
       state.torTypingTimer = setTimeout(flushTorTyping, delay);
@@ -1921,11 +1927,9 @@ footer {
         }
 
         if (state.ghostOn) {
-          // Rare "both started at once": higher priority keeps the floor.
-          const theirPri = Number(message.gp) || 0;
-          if (state.ghostFloor === 'mine' && el.myText.value && theirPri <= state.ghostPri) {
-            return; // I hold the floor; ignore their attempt until they yield
-          }
+          // Reliability rule: never drop a valid Ghost message.
+          // If both sides type at nearly the same time, the last valid message wins.
+          // Dropping by priority made messages appear to arrive on only one side.
           setGhostFloor('theirs');
           ghostArmTakeover();
           // Single golden box: show THEIR live text inside the shared box, read-only, in their color.
@@ -2269,6 +2273,9 @@ footer {
 
         if (el.manualAnswerInput) el.manualAnswerInput.value = '';
 
+        showView('viewJoin');
+        setStatus('connecting…', 'busy');
+        startConnectWatchdog();
         log('manual reply applied. opening direct channel…', 'ok');
         return true;
       } catch (err) {
@@ -2294,10 +2301,9 @@ footer {
       const wantsPassword = el.usePassword.checked;
       const password = String(el.passwordInput.value || '').trim();
 
-      // Tor Mode can use the same password-derived key as WebRTC/manual mode.
-      // The invite link carries only p=1; the password itself never leaves the two browsers.
-      // If the wrong password is typed, the Tor hello/version check will fail because both
-      // sides derive different keys.
+      // Tor + password is supported: the key is derived from the password below,
+      // and the Tor link carries &p=1 so the other side is prompted for it.
+
       if (wantsPassword && !/^[A-Za-z0-9]{4,8}$/.test(password)) {
         log('password must be 4 to 8 letters or numbers.', 'bad');
         el.passwordInput.focus();
@@ -2827,18 +2833,18 @@ footer {
       const wasTorMode = !!state.torMode;
       const timeoutMs = wasTorMode ? TOR_HELLO_TIMEOUT_MS : HELLO_TIMEOUT_MS;
 
-      // Tor Mode depends on Apps Script polling/cache. A single setup message can
-      // be delayed or missed during heavy testing, so resend hello until the peer
-      // confirms the same code version. This does not resend chat text.
-      if (wasTorMode) {
-        state.helloRetryTimer = setInterval(() => {
-          if (state.peerVerified) {
-            stopHelloRetry();
-            return;
-          }
-          sendHello();
-        }, TOR_HELLO_RETRY_MS);
-      }
+      // A single setup message can be delayed or missed (a slow relay/TURN open,
+      // a DH-mix race, or Apps Script polling). Resend hello until the peer confirms,
+      // in BOTH WebRTC and Tor, so one lost hello never causes a FALSE "different
+      // version" failure. This never resends chat text.
+      const retryMs = wasTorMode ? TOR_HELLO_RETRY_MS : 1000;
+      state.helloRetryTimer = setInterval(() => {
+        if (state.peerVerified) {
+          stopHelloRetry();
+          return;
+        }
+        sendHello();
+      }, retryMs);
 
       state.helloTimer = setTimeout(async () => {
         stopHelloRetry();
@@ -2888,7 +2894,7 @@ footer {
 
     function applyEraseSeconds(seconds) {
       // 0 = never auto-erase.
-      // Otherwise clamp hard to 1..10 seconds — never trust a value blindly, even our own.
+      // Otherwise clamp hard to 1..60 seconds — never trust a value blindly, even our own.
       let n = Number(seconds);
       if (!Number.isFinite(n)) n = 3;
       n = Math.round(n);
@@ -2899,7 +2905,7 @@ footer {
         return 0;
       }
 
-      const s = Math.min(10, Math.max(1, n));
+      const s = Math.min(60, Math.max(1, n));
       CLEAR_DELAY_MS = s * 1000;
       REMOTE_CLEAR_FALLBACK_MS = CLEAR_DELAY_MS + 1500;
       return s;
@@ -3398,13 +3404,12 @@ footer {
         message.gp = state.ghostPri;
       }
 
-      if (state.ghostOn) {
-        el.myText.style.color = state.ghostMyColor || '';
-      }
+      // Show my own text in my chosen Ghost color inside the shared box.
+      if (state.ghostOn) el.myText.style.color = state.ghostMyColor || '';
 
       if (state.torMode) {
-        // Do NOT send every keypress immediately through Apps Script.
-        // Keep only the latest text and flush it quickly in Ghost Mode.
+        // Keep only the latest text and flush it soon.
+        // Do not send every keypress directly through Apps Script.
         state.torPendingTyping = message;
         scheduleTorTypingFlush(state.ghostOn ? TOR_GHOST_SEND_THROTTLE_MS : TOR_SEND_THROTTLE_MS);
         return;
@@ -3445,8 +3450,8 @@ footer {
         clearTimeout(state.torTypingTimer);
         state.torTypingTimer = null;
 
-        // Before sending clear, make a best-effort drain of the latest pending text.
-        // This preserves the order: typing first, clear second.
+        // Before sending clear, drain the latest pending text.
+        // This preserves order: typing first, clear second.
         for (let i = 0; i < 4; i += 1) {
           if (state.torPendingTyping && !state.torTypingFlushBusy) {
             await flushTorTyping();
@@ -3460,10 +3465,7 @@ footer {
       }
 
       el.myText.value = '';
-      if (state.ghostOn) {
-        setGhostFloor('free');
-        el.myText.style.color = '';
-      }
+      if (state.ghostOn) { setGhostFloor('free'); el.myText.style.color = ''; }
       applyMyTextLock();
       if (state.keyguardOn && state.keyguardAutoShuffle) keyguardShuffle();
       state.mySeq += 1;
@@ -3581,6 +3583,9 @@ footer {
       state.setupKeyBytes = null;
       state.safetyKeyBytes = null;
       state.ratchetRootBytes = null;
+      state.transportKeyBytes = null;
+      state.transportSendSeq = 0;
+      state.transportRecvSeq = 0;
       state.ratchet = null;
       state.passwordPending = false;
       state.peerVerified = false;
@@ -3741,7 +3746,10 @@ footer {
       const salt = await sha256Bytes('wisp-session-salt-v3|' + state.room + '|' + state.token + '|' + bytesToBase64Url(state.secretBytes || new Uint8Array()));
       state.setupKeyBytes = await hkdfBytes(state.keyBytes, 'setup-encryption-key', 32, salt);
       state.safetyKeyBytes = await hkdfBytes(state.keyBytes, 'safety-code-key', 32, salt);
+      state.transportKeyBytes = await hkdfBytes(state.keyBytes, 'transport-message-key', 32, salt);
       state.ratchetRootBytes = await hkdfBytes(state.keyBytes, 'transport-ratchet-root', 32, salt);
+      state.transportSendSeq = 0;
+      state.transportRecvSeq = 0;
       state.ratchet = null;
     }
 
@@ -3847,76 +3855,62 @@ footer {
     }
 
     async function encryptTransportPayload(payload) {
-      await initRatchet();
+      if (!state.transportKeyBytes) await deriveSessionKeys();
 
-      const step = await ratchetStep(state.ratchet.sendChain, state.ratchet.sendDirection);
-      state.ratchet.sendChain = step.nextChain;
-      state.ratchet.sendSeq += 1;
+      state.transportSendSeq = (Number(state.transportSendSeq) || 0) + 1;
 
+      const dir = getRatchetDirection();
       const header = {
         v: 1,
-        d: state.ratchet.sendDirection,
-        n: state.ratchet.sendSeq,
-        dh: state.ratchet.localPublicJwk
+        d: dir.send,
+        n: state.transportSendSeq
       };
 
       const headerB64 = bytesToBase64Url(utf8(JSON.stringify(header)));
       const data = utf8(JSON.stringify(payload));
-      const encrypted = await aesGcmEncryptBytes(step.messageKey, data, utf8(headerB64));
+      const encrypted = await aesGcmEncryptBytes(state.transportKeyBytes, data, utf8(headerB64));
 
+      // Keep the r1 envelope for compatibility with existing Code.gs validation,
+      // but use a stable HKDF-separated transport key instead of the fragile
+      // browser-to-browser ratchet. This fixes password/Ghost/manual delivery.
       return 'r1.' + headerB64 + '.' + bytesToBase64Url(encrypted.iv) + '.' + bytesToBase64Url(encrypted.ciphertext);
     }
 
     async function decryptTransportPayload(blob) {
       const raw = String(blob || '');
 
-      // Legacy fallback for a peer that still sends old g1 payloads. Normal v3
-      // deployments use only r1 ratcheted payloads after setup.
+      // Setup/control hello uses g1 and the setup key. Normal chat/control uses r1.
       if (!raw.startsWith('r1.')) {
         const key = state.setupKeyBytes || state.keyBytes;
         return { payload: await decryptPayload(key, raw), header: null };
       }
 
-      await initRatchet();
+      if (!state.transportKeyBytes) await deriveSessionKeys();
 
       const parts = raw.split('.');
-      if (parts.length !== 4) throw new Error('invalid ratchet payload.');
-      const header = JSON.parse(new TextDecoder().decode(base64UrlToBytes(parts[1])));
+      if (parts.length !== 4) throw new Error('invalid transport payload.');
 
-      if (!header || header.v !== 1 || header.d !== state.ratchet.recvDirection) {
-        throw new Error('wrong ratchet direction.');
+      const header = JSON.parse(new TextDecoder().decode(base64UrlToBytes(parts[1])));
+      const dir = getRatchetDirection();
+
+      if (!header || header.v !== 1 || header.d !== dir.recv) {
+        throw new Error('wrong transport direction.');
       }
 
       const seq = Number(header.n);
-      if (!Number.isSafeInteger(seq) || seq <= state.ratchet.recvSeq || seq - state.ratchet.recvSeq > 256) {
-        throw new Error('invalid ratchet sequence.');
-      }
-
-      // IMPORTANT: never mutate the receive chain until AES-GCM authentication
-      // succeeds. Otherwise one forged/corrupt blob could permanently desync
-      // the ratchet and make every later valid message undecryptable.
-      let trialChain = state.ratchet.recvChain;
-      let trialSeq = state.ratchet.recvSeq;
-      let messageKey = null;
-
-      while (trialSeq < seq) {
-        const step = await ratchetStep(trialChain, state.ratchet.recvDirection);
-        trialChain = step.nextChain;
-        trialSeq += 1;
-        messageKey = step.messageKey;
+      if (!Number.isSafeInteger(seq) || seq <= state.transportRecvSeq || seq - state.transportRecvSeq > 512) {
+        throw new Error('invalid transport sequence.');
       }
 
       const iv = base64UrlToBytes(parts[2]);
       const ciphertext = base64UrlToBytes(parts[3]);
-      const plain = await aesGcmDecryptBytes(messageKey, iv, ciphertext, utf8(parts[1]));
+      const plain = await aesGcmDecryptBytes(state.transportKeyBytes, iv, ciphertext, utf8(parts[1]));
       const payload = JSON.parse(new TextDecoder().decode(plain));
 
-      // Commit only after authentication and JSON parsing succeed.
-      state.ratchet.recvChain = trialChain;
-      state.ratchet.recvSeq = trialSeq;
+      state.transportRecvSeq = seq;
 
       return { payload, header };
-      }
+    }
 
     async function encryptSetupPayload(payload) {
       if (!state.setupKeyBytes) await deriveSessionKeys();
