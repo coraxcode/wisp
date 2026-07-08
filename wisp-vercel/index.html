@@ -681,6 +681,44 @@ button.keyguard-key.wide { grid-column: span 2; }
 }
 
 /* ------------------------------------------------------------
+   FOCUS GUARD — local visual privacy shield
+   ------------------------------------------------------------ */
+.focus-guard-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  background: #000;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: none !important;
+  transform: translateZ(0);
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.focus-guard-overlay::before {
+  content: attr(data-message);
+  color: var(--accent);
+  font-size: clamp(1rem, 3vw, 1.618rem);
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-align: center;
+  text-transform: uppercase;
+  text-shadow: 0 0 18px var(--accent-glow);
+  padding: var(--s3);
+  white-space: pre-line;
+}
+
+.focus-guard-overlay.on {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* ------------------------------------------------------------
    FOOTER
    ------------------------------------------------------------ */
 footer {
@@ -891,6 +929,21 @@ footer {
           <span><strong style="color: var(--text)">Ghost Mode.</strong> One shared private box, one writer at a time. A screenshot does not show which side wrote the visible message. Works in every mode.</span>
         </label>
 
+        <label class="check">
+          <input id="useFocusGuard" type="checkbox" />
+          <span><strong style="color: var(--text)">Focus Guard.</strong> Hides the chat when this tab loses focus, is hidden, or you click/tap outside the typing box. Tap the black screen to return to typing. It does not block screenshots, screen recording, external cameras, extensions, or malware.</span>
+        </label>
+
+        <label id="focusGuardNotifyRow" class="check hidden">
+          <input id="useFocusGuardNotify" type="checkbox" />
+          <span><strong style="color: var(--text)">Alert the other side.</strong> Optional. Shows a visible Focus Guard notice in the other person's chat box.</span>
+        </label>
+
+        <label id="focusGuardTextRow" class="check hidden">
+          <input id="useFocusGuardText" type="checkbox" checked />
+          <span><strong style="color: var(--text)">Show Focus Guard message.</strong> Optional. Shows “FOCUS GUARD — TAP TO RETURN TO TYPING” on the black screen. If disabled, the screen is plain black.</span>
+        </label>
+
         <div id="ghostOptions" class="hidden" style="border: 1px dashed var(--ghost-gold-line); border-radius: var(--radius-sm); padding: var(--s3); display: grid; gap: var(--s2); margin-top: var(--s2);">
           <label class="check" style="margin:0">
             <input id="ghostRandom" type="checkbox" />
@@ -991,6 +1044,26 @@ footer {
         Ask the other person if they see the same safety code.
       </p>
 
+      <label class="check focusguard-chat-toggle">
+        <input id="useFocusGuardChat" type="checkbox" />
+        <span><strong style="color: var(--text)">Focus Guard.</strong> Hides the chat when this tab loses focus, is hidden, or you click/tap outside the typing box. Tap the black screen to return to typing. It does not block screenshots, screen recording, external cameras, extensions, or malware.</span>
+      </label>
+
+      <label id="focusGuardNotifyChatRow" class="check hidden">
+        <input id="useFocusGuardNotifyChat" type="checkbox" />
+        <span><strong style="color: var(--text)">Alert the other side.</strong> Optional. Shows a visible Focus Guard notice in the other person's chat box.</span>
+      </label>
+
+      <label id="focusGuardTextChatRow" class="check hidden">
+        <input id="useFocusGuardTextChat" type="checkbox" checked />
+        <span><strong style="color: var(--text)">Show Focus Guard message.</strong> Optional. Shows “FOCUS GUARD — TAP TO RETURN TO TYPING” on the black screen. If disabled, the screen is plain black.</span>
+      </label>
+
+      <div id="focusGuardChatTools" class="row hidden" style="border: 1px dashed var(--line); border-radius: var(--radius-sm); padding: var(--s1) var(--s2); margin-top: var(--s1);">
+        <button id="focusGuardOffBtn" type="button">Turn off Focus Guard</button>
+        <span class="lead" style="flex: 1 1 12rem; font-size: var(--fs-xs); margin: 0;">If Focus Guard was enabled before the room was created, it becomes a room rule. Otherwise, this button can turn it off locally.</span>
+      </div>
+
       <label class="check keyguard-toggle">
         <input id="useKeyguard" type="checkbox" />
         <span>
@@ -1060,6 +1133,8 @@ footer {
     </footer>
   </main>
 
+  <div id="focusGuardOverlay" class="focus-guard-overlay" aria-hidden="true"></div>
+
   <script>
     'use strict';
 
@@ -1094,6 +1169,13 @@ footer {
       createBtn: $('createBtn'), riskAck: $('riskAck'), useStun: $('useStun'), useRelay: $('useRelay'), useTor: $('useTor'),
       useGhost: $('useGhost'), ghostOptions: $('ghostOptions'), ghostRandom: $('ghostRandom'),
       ghostColor1: $('ghostColor1'), ghostColor2: $('ghostColor2'), ghostReplyHint: $('ghostReplyHint'),
+      useFocusGuard: $('useFocusGuard'), useFocusGuardNotify: $('useFocusGuardNotify'),
+      useFocusGuardText: $('useFocusGuardText'), focusGuardNotifyRow: $('focusGuardNotifyRow'),
+      focusGuardTextRow: $('focusGuardTextRow'), focusGuardOverlay: $('focusGuardOverlay'),
+      useFocusGuardChat: $('useFocusGuardChat'), useFocusGuardNotifyChat: $('useFocusGuardNotifyChat'),
+      useFocusGuardTextChat: $('useFocusGuardTextChat'), focusGuardNotifyChatRow: $('focusGuardNotifyChatRow'),
+      focusGuardTextChatRow: $('focusGuardTextChatRow'), focusGuardChatTools: $('focusGuardChatTools'),
+      focusGuardOffBtn: $('focusGuardOffBtn'),
       useKeyguard: $('useKeyguard'), keyguardBox: $('keyguardBox'), keyguardKeys: $('keyguardKeys'), keyguardShuffleBtn: $('keyguardShuffleBtn'),
       keyguardLettersBtn: $('keyguardLettersBtn'), keyguardNumbersBtn: $('keyguardNumbersBtn'), keyguardSymbolsBtn: $('keyguardSymbolsBtn'),
       keyguardCompact: $('keyguardCompact'), keyguardLettersOnly: $('keyguardLettersOnly'), keyguardNumbersOnly: $('keyguardNumbersOnly'),
@@ -1132,6 +1214,17 @@ footer {
       ghostIdleTimer: null,    // detects the other side going quiet (3s takeover)
       ghostReplyReady: false,  // may I take over now?
       ghostPri: 0,             // random tiebreaker for the rare "both start at once"
+      focusGuardOn: false,
+      focusGuardRequired: false,
+      focusGuardNotify: false,
+      focusGuardNotifyRequired: false,
+      focusGuardShowText: true,
+      focusGuardLocked: false,
+      focusGuardControlGraceUntil: 0,
+      focusGuardOverlayTapAt: 0,
+      focusGuardLastAlertAt: 0,
+      focusGuardLastAlertReason: '',
+      focusGuardSeenAlertIds: {},
       room: '',
       token: '',
       secretBytes: null,
@@ -1674,7 +1767,19 @@ footer {
       });
       channel.addEventListener('message', async event => {
         try {
-          const decoded = await decryptTransportPayload(String(event.data));
+          const raw = String(event.data || '');
+
+          // Focus Guard urgent alerts use a tiny DTLS-only control frame.
+          // It is for WebRTC modes only and contains no chat text. The WebRTC
+          // DataChannel is already encrypted by DTLS, and this avoids losing the
+          // alert when the browser freezes the tab before WebCrypto finishes.
+          if (raw.startsWith('fg1.')) {
+            const payload = decodeFocusGuardDirectAlert(raw);
+            await handleMessage(payload, { fg: 1 });
+            return;
+          }
+
+          const decoded = await decryptTransportPayload(raw);
           await handleMessage(decoded.payload, decoded.header);
         } catch (_) { /* anything that does not open with our key is ignored */ }
       });
@@ -1913,6 +2018,28 @@ footer {
         return;
       }
 
+      if (message.type === 'focusGuardAlert') {
+        const alertId = String(message.id || '').slice(0, 96);
+        if (alertId) {
+          if (state.focusGuardSeenAlertIds && state.focusGuardSeenAlertIds[alertId]) return;
+          state.focusGuardSeenAlertIds[alertId] = Date.now();
+
+          // Keep the tiny de-duplication cache bounded.
+          const ids = Object.keys(state.focusGuardSeenAlertIds);
+          if (ids.length > 24) {
+            ids
+              .sort((a, b) => state.focusGuardSeenAlertIds[a] - state.focusGuardSeenAlertIds[b])
+              .slice(0, ids.length - 24)
+              .forEach(id => { delete state.focusGuardSeenAlertIds[id]; });
+          }
+        }
+
+        const label = focusGuardAlertText(message.reason);
+        showRemoteFocusGuardNotice(message.reason);
+        log('Focus Guard alert: the other side ' + label + '.', 'warn');
+        return;
+      }
+
       if (message.type === 'typing') {
         await openTorChatIfWaiting();
 
@@ -2047,6 +2174,10 @@ footer {
       state.isCreator = true;
       state.mode = el.useRelay.checked ? 'relay' : (el.useStun.checked ? 'stun' : 'none');
       loadGhostFromUi();
+      loadFocusGuardFromUi();
+      state.focusGuardRequired = !!state.focusGuardOn;
+      state.focusGuardNotifyRequired = !!state.focusGuardNotify;
+      syncFocusGuardUi();
       state.room = '';
       state.token = '';
       state.secretBytes = randomBytes(32);
@@ -2085,6 +2216,7 @@ footer {
           duration: durationMinutes,
           lifetime: state.lifetimeMinutes,
           ghost: ghostPayload(),
+          focus: focusGuardPayload(),
           sdp: state.pc.localDescription.sdp
         };
 
@@ -2180,12 +2312,14 @@ footer {
         state.lifetimeMinutes = applyLifetimeMinutes(offerPayload.lifetime);
 
         applyGhostPayload(offerPayload.ghost);
+        applyFocusGuardPayload(offerPayload.focus);
 
         if (el.useGhost) el.useGhost.checked = state.ghostOn;
         if (el.ghostRandom) el.ghostRandom.checked = state.ghostRandom;
         if (el.ghostColor1) el.ghostColor1.value = state.ghostColor1;
         if (el.ghostColor2) el.ghostColor2.value = state.ghostColor2;
         if (el.ghostOptions) el.ghostOptions.classList.toggle('hidden', !state.ghostOn);
+        syncFocusGuardUi();
 
         el.useSafety.checked = state.safetyEnabled;
         el.useStun.checked = state.mode === 'stun';
@@ -2340,6 +2474,10 @@ footer {
       state.answerApplied = false;
 
       loadGhostFromUi();
+      loadFocusGuardFromUi();
+      state.focusGuardRequired = !!state.focusGuardOn;
+      state.focusGuardNotifyRequired = !!state.focusGuardNotify;
+      syncFocusGuardUi();
 
       if (state.torMode) {
       setStatus('creating Tor room…', 'busy');
@@ -2414,6 +2552,7 @@ footer {
           duration: durationMinutes,
           lifetime: state.lifetimeMinutes,
           ghost: ghostPayload(),
+          focus: focusGuardPayload(),
           sdp: state.pc.localDescription.sdp
         };
         const encryptedOffer = await encryptSetupPayload(payload);
@@ -2577,6 +2716,14 @@ footer {
       state.token = token;
       state.secretBytes = inviteSecretBytes;
 
+      if (isTorInvite) {
+        applyFocusGuardPayload({
+          on: params.get('fg') === '1',
+          notify: params.get('fgn') === '1',
+          showText: params.get('fgt') !== '0'
+        });
+      }
+
       if (params.get('p') === '1') {
         state.passwordPending = true;
         state.torPendingJoin = (params.get('x') === 'tor');
@@ -2623,7 +2770,7 @@ footer {
       const secret = bytesToBase64Url(state.secretBytes);
       const unevaluated = WEB_APP_URL.indexOf('<' + '?') !== -1;
       const baseUrl = (WEB_APP_URL && !unevaluated ? WEB_APP_URL : location.href.split('#')[0]);
-      state.linkValue = baseUrl + '#r=' + encodeURIComponent(state.room) + '&k=' + encodeURIComponent(secret) + '&t=' + encodeURIComponent(state.token) + '&x=tor' + (wantsPassword ? '&p=1' : '');
+      state.linkValue = baseUrl + '#r=' + encodeURIComponent(state.room) + '&k=' + encodeURIComponent(secret) + '&t=' + encodeURIComponent(state.token) + '&x=tor' + (wantsPassword ? '&p=1' : '') + (state.focusGuardOn ? '&fg=1' : '') + (state.focusGuardNotify ? '&fgn=1' : '') + (state.focusGuardOn && !state.focusGuardShowText ? '&fgt=0' : '');
       el.roomLink.value = state.linkValue;
       revealLink(true);
       showView('viewShare');
@@ -2659,12 +2806,14 @@ footer {
         state.lifetimeMinutes = applyLifetimeMinutes(offerPayload.lifetime);
 
         applyGhostPayload(offerPayload.ghost);
+        applyFocusGuardPayload(offerPayload.focus);
 
         if (el.useGhost) el.useGhost.checked = state.ghostOn;
         if (el.ghostRandom) el.ghostRandom.checked = state.ghostRandom;
         if (el.ghostColor1) el.ghostColor1.value = state.ghostColor1;
         if (el.ghostColor2) el.ghostColor2.value = state.ghostColor2;
         if (el.ghostOptions) el.ghostOptions.classList.toggle('hidden', !state.ghostOn);
+        syncFocusGuardUi();
 
         el.useSafety.checked = state.safetyEnabled;
         el.useStun.checked = state.mode === 'stun';
@@ -3033,6 +3182,7 @@ footer {
 
         showView('viewChat');
         applyGhostChrome();
+        syncFocusGuardUi();
         syncKeyguard();
 
         if (state.ghostOn) {
@@ -3045,6 +3195,536 @@ footer {
         // Starting it here can falsely wipe the screen while the password/Tor
         // handshake is still opening.
       }
+
+      /* =========================================================
+       FOCUS GUARD CONTROLLER
+       Local visual shield. It is not an anti-screenshot system.
+       ========================================================= */
+
+    function focusGuardCheckboxSource(target) {
+      if (target === el.useFocusGuardChat || target === el.useFocusGuardNotifyChat || target === el.useFocusGuardTextChat) {
+        return 'chat';
+      }
+
+      return 'start';
+    }
+
+    function isFocusGuardMainToggle(target) {
+      return target === el.useFocusGuard || target === el.useFocusGuardChat;
+    }
+
+    function isFocusGuardNotifyToggle(target) {
+      return target === el.useFocusGuardNotify || target === el.useFocusGuardNotifyChat;
+    }
+
+    function isFocusGuardTextToggle(target) {
+      return target === el.useFocusGuardText || target === el.useFocusGuardTextChat;
+    }
+
+    function focusGuardRoomPolicyActive() {
+      return !!(
+        state.focusGuardRequired &&
+        (
+          state.connected ||
+          state.peerVerified ||
+          state.manualInvitePending ||
+          state.manualMode ||
+          state.torMode ||
+          state.room
+        )
+      );
+    }
+
+    function loadFocusGuardFromUi(event) {
+      const target = event && event.target ? event.target : null;
+      const source = focusGuardCheckboxSource(target);
+      const roomPolicyActive = focusGuardRoomPolicyActive();
+
+      const onBox = source === 'chat' && el.useFocusGuardChat ? el.useFocusGuardChat : el.useFocusGuard;
+      const notifyBox = source === 'chat' && el.useFocusGuardNotifyChat ? el.useFocusGuardNotifyChat : el.useFocusGuardNotify;
+      const textBox = source === 'chat' && el.useFocusGuardTextChat ? el.useFocusGuardTextChat : el.useFocusGuardText;
+
+      // Before a room exists, the creator must be able to configure all Focus Guard
+      // checkboxes freely. Room rules become locked only after the room/session exists.
+      if (roomPolicyActive && state.focusGuardRequired && isFocusGuardMainToggle(target) && onBox && !onBox.checked) {
+        state.focusGuardOn = true;
+        syncFocusGuardUi();
+        log('Focus Guard is required by this room and cannot be turned off during this session.', 'warn');
+        return;
+      }
+
+      if (roomPolicyActive && state.focusGuardNotifyRequired && isFocusGuardNotifyToggle(target) && notifyBox && !notifyBox.checked) {
+        state.focusGuardNotify = true;
+        syncFocusGuardUi();
+        log('Focus Guard alert is required by this room and cannot be turned off during this session.', 'warn');
+        return;
+      }
+
+      if (isFocusGuardMainToggle(target) || !target) {
+        state.focusGuardOn = !!(onBox && onBox.checked);
+      }
+
+      if (roomPolicyActive && state.focusGuardRequired) {
+        state.focusGuardOn = true;
+      }
+
+      if (isFocusGuardNotifyToggle(target) || isFocusGuardMainToggle(target) || !target) {
+        state.focusGuardNotify = !!(state.focusGuardOn && notifyBox && notifyBox.checked);
+      }
+
+      if (roomPolicyActive && state.focusGuardNotifyRequired) {
+        state.focusGuardNotify = true;
+      }
+
+      if (isFocusGuardTextToggle(target) || isFocusGuardMainToggle(target) || !target) {
+        state.focusGuardShowText = !(state.focusGuardOn && textBox && !textBox.checked);
+      }
+
+      if (!state.focusGuardOn) {
+        state.focusGuardNotify = false;
+      }
+
+      if (state.focusGuardOn && el.useKeyguard) {
+        el.useKeyguard.checked = false;
+        state.keyguardOn = false;
+      }
+
+      syncFocusGuardUi();
+      syncKeyguard();
+    }
+
+    function focusGuardPayload() {
+      return {
+        on: !!state.focusGuardOn,
+        required: !!(state.focusGuardRequired || state.focusGuardOn),
+        notify: !!state.focusGuardNotify,
+        notifyRequired: !!(state.focusGuardNotifyRequired || state.focusGuardNotify),
+        showText: !!state.focusGuardShowText
+      };
+    }
+
+    function applyFocusGuardPayload(focus) {
+      const required = !!(focus && (focus.required || focus.on));
+      const notifyRequired = !!(required && focus && (focus.notifyRequired || focus.notify));
+
+      state.focusGuardRequired = required;
+      state.focusGuardOn = required || !!(focus && focus.on);
+      state.focusGuardNotifyRequired = notifyRequired;
+      state.focusGuardNotify = !!(state.focusGuardOn && focus && focus.notify) || notifyRequired;
+      state.focusGuardShowText = !(focus && focus.showText === false);
+
+      syncFocusGuardUi();
+    }
+
+    function setFocusGuardBox(box, value) {
+      if (box) box.checked = !!value;
+    }
+
+    function setFocusGuardDisabled(box, value) {
+      if (box) box.disabled = !!value;
+    }
+
+    function syncFocusGuardUi() {
+      const roomPolicyActive = focusGuardRoomPolicyActive();
+
+      if (roomPolicyActive && state.focusGuardRequired) state.focusGuardOn = true;
+      if (roomPolicyActive && state.focusGuardNotifyRequired) state.focusGuardNotify = true;
+      if (!state.focusGuardOn) state.focusGuardNotify = false;
+
+      setFocusGuardBox(el.useFocusGuard, state.focusGuardOn);
+      setFocusGuardBox(el.useFocusGuardChat, state.focusGuardOn);
+      setFocusGuardBox(el.useFocusGuardNotify, state.focusGuardNotify);
+      setFocusGuardBox(el.useFocusGuardNotifyChat, state.focusGuardNotify);
+      setFocusGuardBox(el.useFocusGuardText, state.focusGuardShowText);
+      setFocusGuardBox(el.useFocusGuardTextChat, state.focusGuardShowText);
+
+      // Start-screen controls must stay editable before a room exists.
+      // Chat controls become locked only when a real room/session policy is active.
+      setFocusGuardDisabled(el.useFocusGuard, roomPolicyActive && state.focusGuardRequired);
+      setFocusGuardDisabled(el.useFocusGuardChat, roomPolicyActive && state.focusGuardRequired);
+      setFocusGuardDisabled(el.useFocusGuardNotify, roomPolicyActive && state.focusGuardNotifyRequired);
+      setFocusGuardDisabled(el.useFocusGuardNotifyChat, roomPolicyActive && state.focusGuardNotifyRequired);
+      setFocusGuardDisabled(el.useFocusGuardText, false);
+      setFocusGuardDisabled(el.useFocusGuardTextChat, false);
+
+      if (el.focusGuardNotifyRow) {
+        el.focusGuardNotifyRow.classList.toggle('hidden', !state.focusGuardOn);
+      }
+
+      if (el.focusGuardTextRow) {
+        el.focusGuardTextRow.classList.toggle('hidden', !state.focusGuardOn);
+      }
+
+      if (el.focusGuardNotifyChatRow) {
+        el.focusGuardNotifyChatRow.classList.toggle('hidden', !state.focusGuardOn);
+      }
+
+      if (el.focusGuardTextChatRow) {
+        el.focusGuardTextChatRow.classList.toggle('hidden', !state.focusGuardOn);
+      }
+
+      if (el.focusGuardChatTools) {
+        el.focusGuardChatTools.classList.toggle('hidden', !state.focusGuardOn);
+      }
+
+      if (el.focusGuardOffBtn) {
+        const roomPolicyActive = focusGuardRoomPolicyActive();
+
+        el.focusGuardOffBtn.disabled = !!(roomPolicyActive && state.focusGuardRequired);
+        el.focusGuardOffBtn.textContent = roomPolicyActive && state.focusGuardRequired ? 'Focus Guard required by room' : 'Turn off Focus Guard';
+        el.focusGuardOffBtn.title = roomPolicyActive && state.focusGuardRequired
+          ? 'The room creator enabled Focus Guard before creating this room, so it cannot be turned off during this session.'
+          : 'Turn off Focus Guard for this tab.';
+      }
+
+      if (!state.focusGuardOn) hideFocusGuard();
+    }
+
+    function focusGuardReady() {
+      return !!(
+        state.focusGuardOn &&
+        !state.keyguardOn &&
+        state.connected &&
+        state.peerVerified &&
+        el.viewChat &&
+        !el.viewChat.classList.contains('hidden')
+      );
+    }
+
+    function showFocusGuard(reason) {
+      if (!focusGuardReady() || !el.focusGuardOverlay) return;
+
+      state.focusGuardLocked = true;
+
+      if (state.focusGuardShowText) {
+        el.focusGuardOverlay.setAttribute('data-message', 'FOCUS GUARD\nTAP TO RETURN TO TYPING');
+      } else {
+        el.focusGuardOverlay.removeAttribute('data-message');
+      }
+      el.focusGuardOverlay.style.visibility = 'visible';
+      el.focusGuardOverlay.style.opacity = '1';
+      el.focusGuardOverlay.style.pointerEvents = 'auto';
+      el.focusGuardOverlay.classList.add('on');
+
+      sendFocusGuardAlert(reason, {
+        urgent: reason === 'window-blur' || reason === 'tab-hidden' || reason === 'pagehide'
+      });
+    }
+
+    function hideFocusGuard(options) {
+      const skipFocus = !!(options && options.skipFocus);
+      const controlGraceMs = Math.max(0, Number(options && options.controlGraceMs) || 0);
+
+      state.focusGuardLocked = false;
+
+      if (controlGraceMs > 0) {
+        state.focusGuardControlGraceUntil = Date.now() + Math.min(controlGraceMs, 15000);
+      }
+
+      if (!el.focusGuardOverlay) return;
+
+      el.focusGuardOverlay.classList.remove('on');
+      el.focusGuardOverlay.removeAttribute('data-message');
+      el.focusGuardOverlay.style.visibility = '';
+      el.focusGuardOverlay.style.opacity = '';
+      el.focusGuardOverlay.style.pointerEvents = '';
+
+      if (skipFocus) return;
+
+      requestAnimationFrame(() => {
+        if (focusGuardReady() && el.myText && !el.myText.disabled) {
+          try {
+            el.myText.focus({ preventScroll: true });
+          } catch (_) {
+            try { el.myText.focus(); } catch (_) {}
+          }
+        }
+      });
+    }
+
+    function focusGuardAlertText(reason) {
+      const value = String(reason || '').toLowerCase();
+
+      if (value === 'window-blur') return 'left or minimized the chat window';
+      if (value === 'tab-hidden') return 'hid or minimized the chat tab';
+      if (value === 'pagehide') return 'left or closed the chat page';
+      if (value === 'outside-typing-area') return 'hid their screen with Focus Guard';
+
+      return 'temporarily hid their screen with Focus Guard';
+    }
+
+    function focusGuardVisibleNoticeText(reason) {
+      const value = String(reason || '').toLowerCase();
+
+      if (value === 'window-blur') return '[Focus Guard] The other side left or minimized the chat window.';
+      if (value === 'tab-hidden') return '[Focus Guard] The other side hid or minimized the chat tab.';
+      if (value === 'pagehide') return '[Focus Guard] The other side left or closed the chat page.';
+      if (value === 'outside-typing-area') return '[Focus Guard] The other side hid their screen.';
+
+      return '[Focus Guard] The other side temporarily hid their screen.';
+    }
+
+    function showRemoteFocusGuardNotice(reason) {
+      const text = focusGuardVisibleNoticeText(reason).slice(0, MAX_TEXT);
+
+      if (state.ghostOn) {
+        setGhostFloor('theirs');
+        ghostArmTakeover();
+        applyMyTextLock();
+        el.myText.style.color = '';
+        el.myText.value = text;
+      }
+
+      el.theirText.value = text;
+      startTheirClearFallback();
+    }
+
+    function encodeFocusGuardDirectAlert(message) {
+      const payload = Object.assign({ v: 1 }, message);
+      return 'fg1.' + bytesToBase64Url(utf8(JSON.stringify(payload)));
+    }
+
+    function decodeFocusGuardDirectAlert(raw) {
+      const text = String(raw || '');
+      if (!text.startsWith('fg1.')) throw new Error('invalid Focus Guard frame.');
+      const bytes = base64UrlToBytes(text.slice(4));
+      const parsed = JSON.parse(new TextDecoder().decode(bytes));
+      if (!parsed || parsed.v !== 1 || parsed.type !== 'focusGuardAlert') {
+        throw new Error('invalid Focus Guard alert.');
+      }
+      return {
+        type: 'focusGuardAlert',
+        id: String(parsed.id || '').slice(0, 96),
+        reason: String(parsed.reason || 'focus-guard').slice(0, 48),
+        at: Number(parsed.at) || Date.now()
+      };
+    }
+
+    function sendFocusGuardDirectAlert(message) {
+      // WebRTC DataChannel is DTLS-encrypted and synchronous to queue.
+      // This is intentionally used only for the urgent "tab/window hidden"
+      // signal so it can leave before the browser freezes the page.
+      if (state.torMode) return false;
+      if (!state.dc || state.dc.readyState !== 'open') return false;
+
+      try {
+        state.dc.send(encodeFocusGuardDirectAlert(message));
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function sendFocusGuardAlert(reason, options) {
+      if (!state.focusGuardNotify || !state.connected || !state.peerVerified || !state.keyBytes) return false;
+
+      const urgent = !!(options && options.urgent);
+      const cleanReason = String(reason || 'focus-guard').slice(0, 48);
+      const now = Date.now();
+
+      // Normal clicks are rate-limited more strongly. Page/window hide events are urgent,
+      // because the browser may freeze the tab soon after firing the event.
+      if (!urgent && now - state.focusGuardLastAlertAt < 3000) return false;
+      if (
+        urgent &&
+        state.focusGuardLastAlertReason === cleanReason &&
+        now - state.focusGuardLastAlertAt < 700
+      ) {
+        return false;
+      }
+
+      state.focusGuardLastAlertAt = now;
+      state.focusGuardLastAlertReason = cleanReason;
+
+      const message = {
+        type: 'focusGuardAlert',
+        id: now.toString(36) + '-' + Math.random().toString(36).slice(2, 10),
+        reason: cleanReason,
+        at: now
+      };
+
+      // Urgent WebRTC path: queue a tiny DTLS-protected control frame synchronously.
+      // This is the reliable path for Normal, Relay-only and Manual Pairing modes.
+      if (urgent) {
+        sendFocusGuardDirectAlert(message);
+      }
+
+      const attempt = () => {
+        try { send(message); } catch (_) {}
+      };
+
+      // Encrypted Wisp-layer fallback. It also supports Tor Mode, but a browser can
+      // still freeze background tabs before any server request completes.
+      attempt();
+
+      if (urgent) {
+        setTimeout(attempt, 60);
+        setTimeout(attempt, 180);
+        setTimeout(attempt, 500);
+      }
+
+      return true;
+    }
+
+    function disableFocusGuardFromChat(event) {
+      if (event) {
+        try { event.preventDefault(); } catch (_) {}
+        try { event.stopPropagation(); } catch (_) {}
+        try {
+          if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+        } catch (_) {}
+      }
+
+      if (focusGuardRoomPolicyActive() && state.focusGuardRequired) {
+        state.focusGuardOn = true;
+        hideFocusGuard();
+        syncFocusGuardUi();
+        log('Focus Guard is required by this room and cannot be turned off during this session.', 'warn');
+        requestAnimationFrame(() => {
+          if (el.myText && !el.myText.disabled) {
+            try {
+              el.myText.focus({ preventScroll: true });
+            } catch (_) {
+              try { el.myText.focus(); } catch (_) {}
+            }
+          }
+        });
+        return;
+      }
+
+      state.focusGuardOn = false;
+      state.focusGuardNotify = false;
+      state.focusGuardNotifyRequired = false;
+      hideFocusGuard();
+      syncFocusGuardUi();
+      syncKeyguard();
+      log('Focus Guard disabled for this tab.', 'warn');
+
+      requestAnimationFrame(() => {
+        if (el.myText && !el.myText.disabled) {
+          try {
+            el.myText.focus({ preventScroll: true });
+          } catch (_) {
+            try { el.myText.focus(); } catch (_) {}
+          }
+        }
+      });
+    }
+
+    function focusGuardControlGraceActive() {
+      return Date.now() < (Number(state.focusGuardControlGraceUntil) || 0);
+    }
+
+    function focusGuardControlTarget(target) {
+      if (!target || !target.closest) return null;
+
+      return target.closest(
+        '#viewChat button, #viewChat input, #viewChat select, #viewChat label, #viewChat summary, #viewChat details'
+      );
+    }
+
+    function focusGuardOverlayUnlock(event) {
+      if (event) {
+        try { event.preventDefault(); } catch (_) {}
+        try { event.stopPropagation(); } catch (_) {}
+        try {
+          if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+        } catch (_) {}
+      }
+
+      const now = Date.now();
+      if (now - (Number(state.focusGuardOverlayTapAt) || 0) < 250) return;
+      state.focusGuardOverlayTapAt = now;
+
+      const clientX = event && typeof event.clientX === 'number' ? event.clientX : null;
+      const clientY = event && typeof event.clientY === 'number' ? event.clientY : null;
+
+      hideFocusGuard({
+        skipFocus: true,
+        controlGraceMs: 8000
+      });
+
+      // Professional no-button behavior:
+      // The black screen is only a shield. A tap on it unlocks the UI and gives
+      // a short safe window so the user can use Panic, End, Clear, or Focus Guard
+      // checkboxes without immediately falling back into Focus Guard.
+      // If the tap was exactly over a safe control, replay that click once.
+      if (clientX === null || clientY === null) return;
+
+      setTimeout(() => {
+        let target = null;
+        try {
+          target = document.elementFromPoint(clientX, clientY);
+        } catch (_) {
+          target = null;
+        }
+
+        const control = focusGuardControlTarget(target);
+        if (!control || control.disabled) return;
+
+        try {
+          if (control.tagName === 'LABEL') {
+            control.click();
+          } else if (control.tagName === 'INPUT' || control.tagName === 'BUTTON' || control.tagName === 'SELECT') {
+            control.click();
+          } else {
+            const clickable = control.querySelector && control.querySelector('button, input, select');
+            if (clickable && !clickable.disabled) clickable.click();
+          }
+        } catch (_) {}
+      }, 0);
+    }
+
+    function focusGuardAllowedTarget(target) {
+      if (!target) return false;
+      if (target === el.focusGuardOverlay) return true;
+      if (target === el.myText) return true;
+      if (el.myText && el.myText.contains && el.myText.contains(target)) return true;
+
+      // Chat controls must remain usable while Focus Guard is active.
+      // Without this safe area, trying to uncheck Focus Guard or pressing Panic/End
+      // would itself trigger the black screen before the control can receive the click.
+      if (focusGuardControlTarget(target)) return true;
+
+      return false;
+    }
+
+    function focusGuardPointerEvent(event) {
+      if (!state.focusGuardOn || state.keyguardOn) return;
+
+      // Avoid duplicate mobile events. Modern browsers fire pointer events for touch.
+      if (event && event.type === 'touchstart' && window.PointerEvent) return;
+
+      if (el.focusGuardOverlay && event.target === el.focusGuardOverlay) {
+        focusGuardOverlayUnlock(event);
+        return;
+      }
+
+      if (!focusGuardReady()) return;
+
+      // After the black screen is dismissed, give the user a short professional
+      // control window for checkboxes/Panic/End/Clear. This prevents the annoying
+      // loop where trying to configure Focus Guard instantly triggers Focus Guard again.
+      if (focusGuardControlGraceActive()) return;
+
+      if (focusGuardAllowedTarget(event.target)) return;
+
+      try { event.preventDefault(); } catch (_) {}
+      try { event.stopPropagation(); } catch (_) {}
+      showFocusGuard('outside-typing-area');
+    }
+
+    function focusGuardPageEvent(reason) {
+      if (!state.focusGuardOn || state.keyguardOn) return;
+
+      // Send the alert before changing the overlay. On minimize/tab-hide, the browser
+      // may pause JavaScript quickly, so this must happen as early as possible.
+      if (focusGuardReady()) {
+        sendFocusGuardAlert(reason, { urgent: true });
+      }
+
+      showFocusGuard(reason);
+    }
 
       /* =========================================================
        GHOST MODE CONTROLLER
@@ -3196,6 +3876,11 @@ footer {
     }
 
     function syncKeyguard() {
+      if (state.focusGuardOn && el.useKeyguard && el.useKeyguard.checked) {
+        el.useKeyguard.checked = false;
+        log('KeyGuard Pad is disabled while Focus Guard is active.', 'warn');
+      }
+
       state.keyguardOn = !!(el.useKeyguard && el.useKeyguard.checked);
       state.keyguardAutoShuffle = !!(el.keyguardAutoShuffle && el.keyguardAutoShuffle.checked);
       state.keyguardCompact = !!(el.keyguardCompact && el.keyguardCompact.checked);
@@ -3608,6 +4293,16 @@ footer {
       state.ratchet = null;
       state.passwordPending = false;
       state.peerVerified = false;
+      state.focusGuardRequired = false;
+      state.focusGuardNotifyRequired = false;
+      state.focusGuardLocked = false;
+      state.focusGuardControlGraceUntil = 0;
+      state.focusGuardOverlayTapAt = 0;
+      state.focusGuardLastAlertAt = 0;
+      state.focusGuardLastAlertReason = '';
+      state.focusGuardSeenAlertIds = {};
+      hideFocusGuard();
+      syncFocusGuardUi();
       el.myText.disabled = false;
       el.myText.placeholder = 'type here — every keystroke is sent live…';
       el.myText.value = '';
@@ -4216,6 +4911,14 @@ footer {
     el.myText.addEventListener('paste', event => { if (state.keyguardOn) event.preventDefault(); });
     el.myText.addEventListener('drop', event => { if (state.keyguardOn) event.preventDefault(); });
     el.useKeyguard.addEventListener('change', syncKeyguard);
+    el.useFocusGuard.addEventListener('change', loadFocusGuardFromUi);
+    el.useFocusGuardNotify.addEventListener('change', loadFocusGuardFromUi);
+    el.useFocusGuardText.addEventListener('change', loadFocusGuardFromUi);
+    el.useFocusGuardChat.addEventListener('change', loadFocusGuardFromUi);
+    el.useFocusGuardNotifyChat.addEventListener('change', loadFocusGuardFromUi);
+    el.useFocusGuardTextChat.addEventListener('change', loadFocusGuardFromUi);
+    el.focusGuardOffBtn.addEventListener('pointerdown', disableFocusGuardFromChat, true);
+    el.focusGuardOffBtn.addEventListener('click', disableFocusGuardFromChat);
     el.keyguardAutoShuffle.addEventListener('change', syncKeyguard);
     el.keyguardCompact.addEventListener('change', () => { state.keyguardPage = 0; syncKeyguard(); });
     el.keyguardLettersOnly.addEventListener('change', () => { if (el.keyguardLettersOnly.checked) keyguardSetMode('letters'); else syncKeyguard(); });
@@ -4264,6 +4967,16 @@ footer {
         await applyManualAnswer(hash);
       }
     });
+    document.addEventListener('pointerdown', focusGuardPointerEvent, true);
+    document.addEventListener('touchstart', focusGuardPointerEvent, true);
+
+    window.addEventListener('blur', () => focusGuardPageEvent('window-blur'), true);
+    window.addEventListener('pagehide', () => focusGuardPageEvent('pagehide'), true);
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) focusGuardPageEvent('tab-hidden');
+    }, true);
+
     let lastEscAt = 0;
     window.addEventListener('keydown', event => {
       if (event.key !== 'Escape') return;
