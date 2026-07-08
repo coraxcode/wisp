@@ -1075,7 +1075,7 @@ footer {
     const MAX_TEXT = 3000;
     const TOR_POLL_MS = 1200;   // how often Tor mode checks the server for new messages
     const TOR_SEND_THROTTLE_MS = 1000; // Tor mode sends after the user pauses typing
-    const TOR_GHOST_SEND_THROTTLE_MS = 250; // Ghost Mode sends faster, but still coalesces typing to avoid Apps Script overload
+    const TOR_GHOST_SEND_THROTTLE_MS = TOR_SEND_THROTTLE_MS; // Keep Tor timing identical with or without Ghost Mode.
     const TOR_CLEAR_EXTRA_MS = 2500;   // extra time so Tor messages are delivered before local erase
     const TOR_PRESENCE_MS = 5000;
     const TOR_PEER_TIMEOUT_MS = 45000; // Tor/Apps Script can be slow; avoid false disconnects during setup
