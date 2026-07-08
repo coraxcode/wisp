@@ -14,7 +14,8 @@ var ROOM_TTL_SECONDS = 3600; // 60 minutes. CacheService may evict earlier.
 var MAX_PAYLOAD_CHARS = 95000; // CacheService key values are limited; keep a safety margin.
 var ROOM_RE = /^[A-Z2-9]{8}$/;
 var TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
-var BLOB_RE = /^g1\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}$/;
+var SETUP_BLOB_RE = /^g1\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}$/;
+var TRANSPORT_BLOB_RE = /^(?:g1\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}|r1\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,})$/;
 
 function doGet(e) {
   var params = {};
@@ -312,7 +313,7 @@ function validateTorBlob_(blob) {
   if (blob.length < 16 || blob.length > TOR_MAX_BLOB_CHARS) {
     throw new Error('message size is invalid.');
   }
-  if (!BLOB_RE.test(blob)) {
+  if (!TRANSPORT_BLOB_RE.test(blob)) {
     throw new Error('message format is invalid.');
   }
 }
@@ -336,7 +337,7 @@ function validateBlob_(blob, label) {
   if (blob.length < 32 || blob.length > MAX_PAYLOAD_CHARS) {
     throw new Error(label + ' size is invalid.');
   }
-  if (!BLOB_RE.test(blob)) {
+  if (!SETUP_BLOB_RE.test(blob)) {
     throw new Error(label + ' format is invalid.');
   }
 }
