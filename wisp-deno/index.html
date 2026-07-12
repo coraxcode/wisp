@@ -1139,7 +1139,7 @@ footer {
     'use strict';
 
     const APP_ID = 'wisp-gas-cache-live-chat';
-    const VERSION = 6;
+    const VERSION = 7;
     const WEB_APP_URL = '<?= webAppUrl ?>';
     const ICE_WAIT_MS = 30000;
     const TURN_TEST_TIMEOUT_MS = 20000;
@@ -1162,7 +1162,9 @@ footer {
     let IDLE_LIMIT_MS = 10 * 60 * 1000;     // room ends after N minutes of silence
     const PANIC_ESC_WINDOW_MS = 1500;       // second Esc press must come within 1.5 seconds
     const ROOM_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    const MAX_RATCHET_SKIP = 128;      // bounded recovery after a failed/lost queued send
+    const MAX_RATCHET_SKIP = 128;      // maximum forward gap accepted inside one receiving chain
+    const MAX_SKIPPED_MESSAGE_KEYS = 256; // global bound against memory/computation abuse
+    const MAX_DH_RATCHET_KEYS = 128;      // bounded public-key history prevents rollback and memory abuse
 
     const $ = id => document.getElementById(id);
     const el = {
@@ -1243,7 +1245,7 @@ footer {
       safetyKeyBytes: null,
       ratchetRootBytes: null,
       transportKeyBytes: null,       // epoch 0 bootstrap transport key
-      transportEpoch: 0,             // 0 = bootstrap, 1 = ECDH + symmetric ratchet
+      transportEpoch: 0,             // 0 = bootstrap, 2 = authenticated P-256 Double Ratchet
       transportSendSeq: 0,
       transportRecvSeq: 0,
       transportSendQueue: Promise.resolve(),
@@ -1252,6 +1254,7 @@ footer {
       cryptoGeneration: 0,
       ratchetInitPromise: null,
       ratchetMixQueue: Promise.resolve(),
+      doubleRatchetQueue: Promise.resolve(),
       peerCodeVerified: false,
       epoch1ReadySent: false,
       epoch1RemoteReady: false,
@@ -1859,10 +1862,14 @@ footer {
     }
 
     function hasActiveTransportKeyMaterial() {
-      if (state.transportEpoch === 1) {
+      if (state.transportEpoch === 2) {
         return !!(
           state.ratchet &&
           state.ratchet.dhMixed &&
+          state.ratchet.rootKey &&
+          state.ratchet.localKeyPair &&
+          state.ratchet.localPublicJwk &&
+          state.ratchet.remotePublicJwk &&
           state.ratchet.sendChain &&
           state.ratchet.recvChain
         );
@@ -1873,7 +1880,7 @@ footer {
 
     // Code.gs validates Tor mailbox entries using the established r1 four-part
     // shape. The browser transport is r2 because its authenticated header carries
-    // epoch-1 ratchet metadata. For Tor only, adapt the mailbox prefix without
+    // Double Ratchet metadata. For Tor only, adapt the mailbox prefix without
     // changing the header, IV, ciphertext or authentication tag. The receiver
     // restores r2 before parsing and authenticating the packet. Setup packets (g1)
     // pass through unchanged.
@@ -2158,7 +2165,7 @@ footer {
       // A valid epoch-1 application payload may cross the final ready/ack messages.
       // Keep a small bounded queue instead of silently discarding it.
       if (!state.peerVerified) {
-        if (transportHeader && Number(transportHeader.e) === 1) {
+        if (transportHeader && Number(transportHeader.e) === 2) {
           if (!Array.isArray(state.preverifiedMessages)) state.preverifiedMessages = [];
           if (state.preverifiedMessages.length < 64) {
             state.preverifiedMessages.push({ message: message, header: transportHeader });
@@ -3119,8 +3126,8 @@ footer {
           throw new Error('tor safety code not ready.');
         }
         material = 'tor|' + [
-          canonicalRatchetPublic(state.ratchet.localPublicJwk),
-          state.ratchet.remotePublicText
+          canonicalRatchetPublic(state.ratchet.initialLocalPublicJwk || state.ratchet.localPublicJwk),
+          String(state.ratchet.initialRemotePublicText || state.ratchet.remotePublicText || '')
         ].sort().join('||');
       } else {
         const local = state.pc && state.pc.localDescription ? state.pc.localDescription.sdp : '';
@@ -3558,29 +3565,29 @@ footer {
         state.epoch1RemoteAck &&
         state.ratchet &&
         state.ratchet.dhMixed &&
+        state.ratchet.rootKey &&
+        state.ratchet.localKeyPair &&
+        state.ratchet.remotePublicJwk &&
         state.ratchet.sendChain &&
         state.ratchet.recvChain
       );
 
       if (!ready) return false;
 
-      state.transportEpoch = 1;
+      state.transportEpoch = 2;
       state.peerVerified = true;
+      state.ratchet.doubleRatchetActive = true;
       state.lastProtocolErrorAt = 0;
       state.lastProtocolErrorText = '';
 
-      // Epoch 0 and the master/bootstrap material are no longer needed after
-      // mutual ECDH confirmation. Erasing them is essential: retaining the
-      // master key, the ECDH root or the private ECDH key would allow a later
-      // compromise of this tab to reconstruct the beginning of the epoch-1
-      // chains and defeat forward secrecy for earlier messages.
+      // The bootstrap/master material is no longer needed after mutual ECDH
+      // confirmation and is erased. The CURRENT root key and CURRENT private
+      // P-256 key remain only because a real DH ratchet needs them for the next
+      // authenticated turn; each successful DH step replaces the old values.
       zeroBytes(state.transportKeyBytes);
       state.transportKeyBytes = null;
       zeroBytes(state.ratchetRootBytes);
       state.ratchetRootBytes = null;
-      zeroBytes(state.ratchet.rootKey);
-      state.ratchet.rootKey = null;
-      state.ratchet.localKeyPair = null;
       zeroBytes(state.keyBytes);
       zeroBytes(state.secretBytes);
       state.keyBytes = null;
@@ -3612,9 +3619,9 @@ footer {
         await showSafetyCode();
       }
 
-      log('forward-secure epoch 1 established — per-message ratchet active.', 'ok');
+      log('forward-secure epoch 1 established — P-256 Double Ratchet active.', 'ok');
 
-      // Valid epoch-1 payloads can arrive during the final ready/ack crossing.
+      // Valid Double Ratchet payloads can arrive during the final ready/ack crossing.
       // Replay them only after the local UI/session policy is fully verified.
       const queued = Array.isArray(state.preverifiedMessages)
         ? state.preverifiedMessages.splice(0, 64)
@@ -4772,10 +4779,11 @@ footer {
 
     async function endSession(notify, silent) {
       state.localClosing = true;
+      if (notify) await notifyPeerEnd();
       state.cryptoGeneration = (Number(state.cryptoGeneration) || 0) + 1;
       state.ratchetInitPromise = null;
       state.ratchetMixQueue = Promise.resolve();
-      if (notify) await notifyPeerEnd();
+      state.doubleRatchetQueue = Promise.resolve();
       clearInterval(state.pollTimer);
       clearTimeout(state.myClearTimer);
       clearTimeout(state.theirClearTimer);
@@ -4822,6 +4830,7 @@ footer {
       state.setupSendQueue = Promise.resolve();
       state.ratchetInitPromise = null;
       state.ratchetMixQueue = Promise.resolve();
+      state.doubleRatchetQueue = Promise.resolve();
       state.peerCodeVerified = false;
       state.epoch1ReadySent = false;
       state.epoch1RemoteReady = false;
@@ -4873,11 +4882,7 @@ footer {
       zeroBytes(state.safetyKeyBytes);
       zeroBytes(state.ratchetRootBytes);
       zeroBytes(state.transportKeyBytes);
-      if (state.ratchet) {
-        zeroBytes(state.ratchet.rootKey);
-        zeroBytes(state.ratchet.sendChain);
-        zeroBytes(state.ratchet.recvChain);
-      }
+      if (state.ratchet) wipeRatchetState(state.ratchet);
       state.secretBytes = null;
       state.keyBytes = null;
       state.setupKeyBytes = null;
@@ -5062,6 +5067,7 @@ footer {
       state.cryptoGeneration = generation;
       state.ratchetInitPromise = null;
       state.ratchetMixQueue = Promise.resolve();
+      state.doubleRatchetQueue = Promise.resolve();
 
       const room = String(state.room || '');
       const token = String(state.token || '');
@@ -5097,11 +5103,7 @@ footer {
         zeroBytes(state.safetyKeyBytes);
         zeroBytes(state.transportKeyBytes);
         zeroBytes(state.ratchetRootBytes);
-        if (state.ratchet) {
-          zeroBytes(state.ratchet.rootKey);
-          zeroBytes(state.ratchet.sendChain);
-          zeroBytes(state.ratchet.recvChain);
-        }
+        if (state.ratchet) wipeRatchetState(state.ratchet);
 
         state.setupKeyBytes = setupKey;
         state.safetyKeyBytes = safetyKey;
@@ -5115,6 +5117,7 @@ footer {
         state.transportSendQueue = Promise.resolve();
         state.transportRecvQueue = Promise.resolve();
         state.setupSendQueue = Promise.resolve();
+        state.doubleRatchetQueue = Promise.resolve();
         state.peerCodeVerified = false;
         state.epoch1ReadySent = false;
         state.epoch1RemoteReady = false;
@@ -5141,8 +5144,159 @@ footer {
     }
 
     function canonicalRatchetPublic(jwk) {
-      if (!jwk || !jwk.x || !jwk.y) return '';
+      if (!jwk || typeof jwk.x !== 'string' || typeof jwk.y !== 'string') return '';
       return JSON.stringify({ crv: 'P-256', kty: 'EC', x: String(jwk.x), y: String(jwk.y) });
+    }
+
+    function compactRatchetPublic(jwk) {
+      return { x: String(jwk && jwk.x || ''), y: String(jwk && jwk.y || '') };
+    }
+
+    function normalizeRatchetPublic(jwk) {
+      if (!jwk || typeof jwk.x !== 'string' || typeof jwk.y !== 'string') {
+        throw new Error('ratchet header is missing a valid P-256 public key.');
+      }
+
+      const x = String(jwk.x);
+      const y = String(jwk.y);
+      if (!/^[A-Za-z0-9_-]{43,44}$/.test(x) || !/^[A-Za-z0-9_-]{43,44}$/.test(y)) {
+        throw new Error('ratchet P-256 public key encoding is invalid.');
+      }
+      if (base64UrlToBytes(x).length !== 32 || base64UrlToBytes(y).length !== 32) {
+        throw new Error('ratchet P-256 public key coordinates are invalid.');
+      }
+
+      return { kty: 'EC', crv: 'P-256', x: x, y: y, ext: true };
+    }
+
+    async function generateRatchetKeyPair() {
+      const keyPair = await crypto.subtle.generateKey(
+        { name: 'ECDH', namedCurve: 'P-256' },
+        false,
+        ['deriveBits']
+      );
+      const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+      return {
+        keyPair: keyPair,
+        publicJwk: normalizeRatchetPublic(publicJwk)
+      };
+    }
+
+    async function importRatchetPublicKey(jwk) {
+      const normalized = normalizeRatchetPublic(jwk);
+      return crypto.subtle.importKey(
+        'jwk',
+        normalized,
+        { name: 'ECDH', namedCurve: 'P-256' },
+        false,
+        []
+      );
+    }
+
+    async function deriveRatchetSharedSecret(privateKey, remoteJwk) {
+      if (!privateKey) throw new Error('local Double Ratchet private key is unavailable.');
+      const remoteKey = await importRatchetPublicKey(remoteJwk);
+      return new Uint8Array(await crypto.subtle.deriveBits(
+        { name: 'ECDH', public: remoteKey },
+        privateKey,
+        256
+      ));
+    }
+
+    function queueDoubleRatchetOperation(operation) {
+      const task = Promise.resolve(state.doubleRatchetQueue)
+        .catch(() => undefined)
+        .then(operation);
+
+      state.doubleRatchetQueue = task.catch(() => undefined);
+      return task;
+    }
+
+    function cloneSkippedMessageKeys(source) {
+      const result = new Map();
+      if (!(source instanceof Map)) return result;
+      for (const [id, key] of source.entries()) {
+        if (key instanceof Uint8Array && key.length === 32) {
+          result.set(String(id), new Uint8Array(key));
+        }
+      }
+      return result;
+    }
+
+    function wipeSkippedMessageKeys(keys) {
+      if (!(keys instanceof Map)) return;
+      for (const key of keys.values()) zeroBytes(key);
+      keys.clear();
+    }
+
+    function cloneRatchetState(ratchet) {
+      if (!ratchet || !ratchet.ready || !ratchet.dhMixed) {
+        throw new Error('Double Ratchet state is unavailable.');
+      }
+      return {
+        ready: true,
+        generation: ratchet.generation,
+        rootKey: ratchet.rootKey ? new Uint8Array(ratchet.rootKey) : null,
+        localKeyPair: ratchet.localKeyPair,
+        localPublicJwk: ratchet.localPublicJwk ? { ...ratchet.localPublicJwk } : null,
+        localPublicText: String(ratchet.localPublicText || ''),
+        remotePublicJwk: ratchet.remotePublicJwk ? { ...ratchet.remotePublicJwk } : null,
+        remotePublicText: String(ratchet.remotePublicText || ''),
+        initialLocalPublicJwk: ratchet.initialLocalPublicJwk ? { ...ratchet.initialLocalPublicJwk } : null,
+        initialRemotePublicText: String(ratchet.initialRemotePublicText || ''),
+        dhMixed: true,
+        doubleRatchetActive: !!ratchet.doubleRatchetActive,
+        sendDirection: String(ratchet.sendDirection || ''),
+        recvDirection: String(ratchet.recvDirection || ''),
+        sendChain: ratchet.sendChain ? new Uint8Array(ratchet.sendChain) : null,
+        recvChain: ratchet.recvChain ? new Uint8Array(ratchet.recvChain) : null,
+        sendSeq: Number(ratchet.sendSeq) || 0,
+        recvSeq: Number(ratchet.recvSeq) || 0,
+        previousSendCount: Number(ratchet.previousSendCount) || 0,
+        sendRatchetPending: !!ratchet.sendRatchetPending,
+        skippedKeys: cloneSkippedMessageKeys(ratchet.skippedKeys),
+        remotePublicHistory: Array.isArray(ratchet.remotePublicHistory)
+          ? ratchet.remotePublicHistory.map(String).slice(-MAX_DH_RATCHET_KEYS)
+          : [],
+        dhRatchetSteps: Number(ratchet.dhRatchetSteps) || 0
+      };
+    }
+
+    function wipeRatchetState(ratchet) {
+      if (!ratchet) return;
+      zeroBytes(ratchet.rootKey);
+      zeroBytes(ratchet.sendChain);
+      zeroBytes(ratchet.recvChain);
+      wipeSkippedMessageKeys(ratchet.skippedKeys);
+      ratchet.rootKey = null;
+      ratchet.sendChain = null;
+      ratchet.recvChain = null;
+      ratchet.localKeyPair = null;
+      ratchet.remotePublicJwk = null;
+    }
+
+    function commitRatchetState(draft, generation) {
+      if (generation !== state.cryptoGeneration) {
+        wipeRatchetState(draft);
+        throw new Error('stale Double Ratchet operation was cancelled.');
+      }
+      const old = state.ratchet;
+      state.ratchet = draft;
+      if (old && old !== draft) wipeRatchetState(old);
+    }
+
+    function skippedMessageKeyId(publicText, messageNumber) {
+      return String(publicText || '') + '|' + String(messageNumber);
+    }
+
+    function storeSkippedMessageKey(ratchet, publicText, messageNumber, messageKey) {
+      if (!(ratchet.skippedKeys instanceof Map)) ratchet.skippedKeys = new Map();
+      if (ratchet.skippedKeys.size >= MAX_SKIPPED_MESSAGE_KEYS) {
+        throw new Error('too many skipped Double Ratchet message keys.');
+      }
+      const id = skippedMessageKeyId(publicText, messageNumber);
+      if (ratchet.skippedKeys.has(id)) throw new Error('duplicate skipped message key.');
+      ratchet.skippedKeys.set(id, messageKey);
     }
 
     async function initRatchet() {
@@ -5165,15 +5319,10 @@ footer {
         let recvChain = null;
 
         try {
-          const keyPair = await crypto.subtle.generateKey(
-            { name: 'ECDH', namedCurve: 'P-256' },
-            false,
-            ['deriveBits']
-          );
-          const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
-          salt = await sha256Bytes('wisp-ratchet-chain-salt-v4|' + room + '|' + token);
-          sendChain = await hkdfBytes(rootSeed, 'chain|' + dir.send, 32, salt);
-          recvChain = await hkdfBytes(rootSeed, 'chain|' + dir.recv, 32, salt);
+          const generated = await generateRatchetKeyPair();
+          salt = await sha256Bytes('wisp-ratchet-chain-salt-v5|' + room + '|' + token);
+          sendChain = await hkdfBytes(rootSeed, 'initial-chain|' + dir.send, 32, salt);
+          recvChain = await hkdfBytes(rootSeed, 'initial-chain|' + dir.recv, 32, salt);
 
           if (
             generation !== state.cryptoGeneration ||
@@ -5183,8 +5332,6 @@ footer {
             throw new Error('session changed while generating the ECDH key pair.');
           }
 
-          // A second initializer can no longer win this race, but keep this
-          // defensive branch so future refactors still preserve one key pair.
           if (state.ratchet && state.ratchet.ready) {
             zeroBytes(rootSeed);
             zeroBytes(sendChain);
@@ -5192,25 +5339,31 @@ footer {
             return state.ratchet;
           }
 
+          const localPublicJwk = compactRatchetPublic(generated.publicJwk);
           state.ratchet = {
             ready: true,
             generation: generation,
             rootKey: rootSeed,
-            localKeyPair: keyPair,
-            localPublicJwk: {
-              kty: 'EC',
-              crv: 'P-256',
-              x: publicJwk.x,
-              y: publicJwk.y
-            },
+            localKeyPair: generated.keyPair,
+            localPublicJwk: localPublicJwk,
+            localPublicText: canonicalRatchetPublic(localPublicJwk),
+            remotePublicJwk: null,
             remotePublicText: '',
+            initialLocalPublicJwk: { ...localPublicJwk },
+            initialRemotePublicText: '',
             dhMixed: false,
+            doubleRatchetActive: false,
             sendDirection: dir.send,
             recvDirection: dir.recv,
             sendChain: sendChain,
             recvChain: recvChain,
             sendSeq: 0,
-            recvSeq: 0
+            recvSeq: 0,
+            previousSendCount: 0,
+            sendRatchetPending: false,
+            skippedKeys: new Map(),
+            remotePublicHistory: [],
+            dhRatchetSteps: 0
           };
           sendChain = recvChain = null;
           return state.ratchet;
@@ -5228,15 +5381,13 @@ footer {
       try {
         return await initPromise;
       } finally {
-        if (state.ratchetInitPromise === initPromise) {
-          state.ratchetInitPromise = null;
-        }
+        if (state.ratchetInitPromise === initPromise) state.ratchetInitPromise = null;
       }
     }
 
     async function getRatchetPublicJwk() {
       await initRatchet();
-      return state.ratchet.localPublicJwk;
+      return compactRatchetPublic(state.ratchet.localPublicJwk);
     }
 
     async function mixRatchetRemotePublic(remoteJwk) {
@@ -5249,22 +5400,14 @@ footer {
     }
 
     async function mixRatchetRemotePublicNow(remoteJwk) {
-      if (!remoteJwk || typeof remoteJwk.x !== 'string' || typeof remoteJwk.y !== 'string') {
-        throw new Error('peer handshake is missing a valid ECDH public key.');
-      }
-      if (remoteJwk.x.length > 128 || remoteJwk.y.length > 128) {
-        throw new Error('peer ECDH public key is invalid.');
-      }
-
+      const normalizedRemote = normalizeRatchetPublic(remoteJwk);
       const generation = Number(state.cryptoGeneration) || 0;
       const ratchet = await initRatchet();
       if (generation !== state.cryptoGeneration || ratchet !== state.ratchet) {
         throw new Error('stale ECDH operation was cancelled.');
       }
 
-      const remoteText = canonicalRatchetPublic(remoteJwk);
-      if (!remoteText) throw new Error('peer ECDH public key is invalid.');
-
+      const remoteText = canonicalRatchetPublic(normalizedRemote);
       if (ratchet.remotePublicText) {
         if (remoteText === ratchet.remotePublicText) return ratchet;
         throw new Error('a second peer ECDH identity was received for this one-person room. create a new room and use the invite only once.');
@@ -5277,25 +5420,12 @@ footer {
       let newRecvChain = null;
 
       try {
-        const remoteKey = await crypto.subtle.importKey(
-          'jwk',
-          { kty: 'EC', crv: 'P-256', x: String(remoteJwk.x), y: String(remoteJwk.y), ext: true },
-          { name: 'ECDH', namedCurve: 'P-256' },
-          false,
-          []
-        );
-
-        shared = new Uint8Array(await crypto.subtle.deriveBits(
-          { name: 'ECDH', public: remoteKey },
-          ratchet.localKeyPair.privateKey,
-          256
-        ));
-
-        const orderedPubs = [canonicalRatchetPublic(ratchet.localPublicJwk), remoteText].sort().join('|');
-        newRoot = await hkdfBytes(shared, 'dh-ratchet-root-v4|' + orderedPubs, 32, ratchet.rootKey);
-        salt = await sha256Bytes('wisp-dh-chain-salt-v4|' + orderedPubs);
-        newSendChain = await hkdfBytes(newRoot, 'chain|' + ratchet.sendDirection, 32, salt);
-        newRecvChain = await hkdfBytes(newRoot, 'chain|' + ratchet.recvDirection, 32, salt);
+        shared = await deriveRatchetSharedSecret(ratchet.localKeyPair.privateKey, normalizedRemote);
+        const orderedPubs = [ratchet.localPublicText, remoteText].sort().join('|');
+        newRoot = await hkdfBytes(shared, 'initial-dh-root-v5|' + orderedPubs, 32, ratchet.rootKey);
+        salt = await sha256Bytes('wisp-initial-dh-chain-salt-v5|' + orderedPubs);
+        newSendChain = await hkdfBytes(newRoot, 'initial-chain|' + ratchet.sendDirection, 32, salt);
+        newRecvChain = await hkdfBytes(newRoot, 'initial-chain|' + ratchet.recvDirection, 32, salt);
 
         if (
           generation !== state.cryptoGeneration ||
@@ -5303,10 +5433,6 @@ footer {
           ratchet.generation !== generation
         ) {
           throw new Error('session changed while completing ECDH.');
-        }
-
-        if (ratchet.remotePublicText && ratchet.remotePublicText !== remoteText) {
-          throw new Error('peer ECDH identity changed during the secure handshake.');
         }
 
         const oldRoot = ratchet.rootKey;
@@ -5318,7 +5444,12 @@ footer {
         ratchet.recvChain = newRecvChain;
         ratchet.sendSeq = 0;
         ratchet.recvSeq = 0;
+        ratchet.previousSendCount = 0;
+        ratchet.remotePublicJwk = compactRatchetPublic(normalizedRemote);
         ratchet.remotePublicText = remoteText;
+        ratchet.initialRemotePublicText = remoteText;
+        ratchet.remotePublicHistory = [remoteText];
+        ratchet.sendRatchetPending = !!state.isCreator;
         ratchet.dhMixed = true;
         state.epoch1Transcript = '';
 
@@ -5336,13 +5467,165 @@ footer {
       }
     }
 
-    async function ratchetStep(chainKey, purpose) {
+    async function ratchetStep(chainKey) {
       if (!(chainKey instanceof Uint8Array) || chainKey.length !== 32) {
-        throw new Error('ratchet chain key is invalid.');
+        throw new Error('Double Ratchet chain key is invalid.');
       }
-      const next = await hmacSha256(chainKey, 'wisp-ratchet-chain-next-v4|' + purpose);
-      const msg = await hmacSha256(chainKey, 'wisp-ratchet-message-key-v4|' + purpose);
+      const next = await hmacSha256(chainKey, 'wisp-double-ratchet-chain-next-v1');
+      const msg = await hmacSha256(chainKey, 'wisp-double-ratchet-message-key-v1');
       return { nextChain: next, messageKey: msg };
+    }
+
+    async function doubleRatchetKdfRoot(rootKey, sharedSecret, direction, senderPublicText, receiverPublicText) {
+      if (!(rootKey instanceof Uint8Array) || rootKey.length !== 32) {
+        throw new Error('Double Ratchet root key is invalid.');
+      }
+      if (!(sharedSecret instanceof Uint8Array) || sharedSecret.length !== 32) {
+        throw new Error('Double Ratchet shared secret is invalid.');
+      }
+
+      let output = null;
+      try {
+        output = await hkdfBytes(
+          sharedSecret,
+          'double-ratchet-root-v1|' + String(direction) + '|' +
+            String(senderPublicText) + '|' + String(receiverPublicText),
+          64,
+          rootKey
+        );
+        return {
+          rootKey: output.slice(0, 32),
+          chainKey: output.slice(32, 64)
+        };
+      } finally {
+        zeroBytes(output);
+      }
+    }
+
+    async function skipMessageKeys(ratchet, until) {
+      const target = Number(until);
+      if (!Number.isSafeInteger(target) || target < 0) {
+        throw new Error('invalid Double Ratchet message number.');
+      }
+      if (!ratchet.recvChain) throw new Error('Double Ratchet receive chain is unavailable.');
+      if (target < ratchet.recvSeq) return;
+      if (target - ratchet.recvSeq > MAX_RATCHET_SKIP) {
+        throw new Error('Double Ratchet sequence gap is too large.');
+      }
+
+      while (ratchet.recvSeq < target) {
+        const current = ratchet.recvChain;
+        const step = await ratchetStep(current);
+        ratchet.recvChain = step.nextChain;
+        storeSkippedMessageKey(ratchet, ratchet.remotePublicText, ratchet.recvSeq, step.messageKey);
+        ratchet.recvSeq += 1;
+        zeroBytes(current);
+      }
+    }
+
+    async function rotateSendingRatchet(ratchet) {
+      if (!ratchet.sendRatchetPending) return;
+      if (!ratchet.remotePublicJwk || !ratchet.remotePublicText) {
+        throw new Error('remote Double Ratchet public key is unavailable.');
+      }
+
+      const generated = await generateRatchetKeyPair();
+      const newLocalJwk = compactRatchetPublic(generated.publicJwk);
+      const newLocalText = canonicalRatchetPublic(newLocalJwk);
+      let shared = null;
+      let derived = null;
+
+      try {
+        shared = await deriveRatchetSharedSecret(generated.keyPair.privateKey, ratchet.remotePublicJwk);
+        derived = await doubleRatchetKdfRoot(
+          ratchet.rootKey,
+          shared,
+          ratchet.sendDirection,
+          newLocalText,
+          ratchet.remotePublicText
+        );
+
+        const oldRoot = ratchet.rootKey;
+        const oldSendChain = ratchet.sendChain;
+        ratchet.previousSendCount = ratchet.sendSeq;
+        ratchet.sendSeq = 0;
+        ratchet.rootKey = derived.rootKey;
+        ratchet.sendChain = derived.chainKey;
+        ratchet.localKeyPair = generated.keyPair;
+        ratchet.localPublicJwk = newLocalJwk;
+        ratchet.localPublicText = newLocalText;
+        ratchet.sendRatchetPending = false;
+        ratchet.dhRatchetSteps += 1;
+        derived = null;
+        zeroBytes(oldRoot);
+        zeroBytes(oldSendChain);
+      } finally {
+        zeroBytes(shared);
+        if (derived) {
+          zeroBytes(derived.rootKey);
+          zeroBytes(derived.chainKey);
+        }
+      }
+    }
+
+    async function applyRemoteRatchet(ratchet, remoteJwk, previousChainLength, direction) {
+      const normalizedRemote = normalizeRatchetPublic(remoteJwk);
+      const remoteText = canonicalRatchetPublic(normalizedRemote);
+      if (remoteText === ratchet.remotePublicText) return;
+      if (ratchet.sendRatchetPending) {
+        throw new Error('peer attempted a second DH ratchet step before the local reply.');
+      }
+      if (ratchet.remotePublicHistory.includes(remoteText)) {
+        throw new Error('replayed or rolled-back Double Ratchet public key.');
+      }
+      // Keep a bounded recent-key window. Older delayed packets can still use a
+      // stored skipped message key; any unauthenticated rollback attempt is
+      // processed transactionally and cannot commit state.
+      if (ratchet.remotePublicHistory.length >= MAX_DH_RATCHET_KEYS) {
+        ratchet.remotePublicHistory.splice(0, ratchet.remotePublicHistory.length - MAX_DH_RATCHET_KEYS + 1);
+      }
+
+      await skipMessageKeys(ratchet, previousChainLength);
+
+      let shared = null;
+      let derived = null;
+      try {
+        shared = await deriveRatchetSharedSecret(ratchet.localKeyPair.privateKey, normalizedRemote);
+        derived = await doubleRatchetKdfRoot(
+          ratchet.rootKey,
+          shared,
+          direction,
+          remoteText,
+          ratchet.localPublicText
+        );
+
+        const oldRoot = ratchet.rootKey;
+        const oldRecvChain = ratchet.recvChain;
+        ratchet.rootKey = derived.rootKey;
+        ratchet.recvChain = derived.chainKey;
+        ratchet.recvSeq = 0;
+        ratchet.remotePublicJwk = compactRatchetPublic(normalizedRemote);
+        ratchet.remotePublicText = remoteText;
+        ratchet.remotePublicHistory.push(remoteText);
+        ratchet.sendRatchetPending = true;
+        ratchet.dhRatchetSteps += 1;
+        derived = null;
+        zeroBytes(oldRoot);
+        zeroBytes(oldRecvChain);
+      } finally {
+        zeroBytes(shared);
+        if (derived) {
+          zeroBytes(derived.rootKey);
+          zeroBytes(derived.chainKey);
+        }
+      }
+    }
+
+    function shouldAdvanceDhRatchet(payload) {
+      // Presence packets contain no user data. Keeping them on the current chain
+      // avoids needless P-256 rotations every five seconds in Tor Mode. The next
+      // real encrypted application/control message advances the pending DH step.
+      return !payload || String(payload.type || '') !== 'ping';
     }
 
     async function aesGcmEncryptBytes(keyBytes, plaintextBytes, aadBytes) {
@@ -5358,51 +5641,154 @@ footer {
       return new Uint8Array(plain);
     }
 
-    async function encryptTransportPayload(payload) {
+    async function encryptDoubleRatchetPayloadNow(payload) {
+      const generation = Number(state.cryptoGeneration) || 0;
+      const ratchet = cloneRatchetState(state.ratchet);
       const dir = getRatchetDirection();
-      const data = utf8(JSON.stringify(payload));
+      let data = null;
+      let step = null;
 
-      if (state.transportEpoch === 1) {
-        if (!state.ratchet || !state.ratchet.dhMixed || !state.ratchet.sendChain) {
-          throw new Error('forward-secure send ratchet is not ready.');
+      try {
+        if (ratchet.generation !== generation || ratchet.sendDirection !== dir.send) {
+          throw new Error('Double Ratchet session generation or direction mismatch.');
+        }
+        if (ratchet.sendRatchetPending && shouldAdvanceDhRatchet(payload)) {
+          await rotateSendingRatchet(ratchet);
+        }
+        if (!ratchet.sendChain || !ratchet.localPublicJwk || !ratchet.remotePublicJwk) {
+          throw new Error('Double Ratchet send state is incomplete.');
         }
 
-        const seq = (Number(state.ratchet.sendSeq) || 0) + 1;
-        const header = { v: 2, e: 1, d: dir.send, n: seq };
+        const messageNumber = ratchet.sendSeq;
+        const header = {
+          v: 3,
+          e: 2,
+          d: dir.send,
+          dh: compactRatchetPublic(ratchet.localPublicJwk),
+          pn: ratchet.previousSendCount,
+          n: messageNumber
+        };
         const headerB64 = bytesToBase64Url(utf8(JSON.stringify(header)));
-        const purpose = 'epoch1|' + dir.send + '|' + seq;
-        const currentChain = state.ratchet.sendChain;
-        const step = await ratchetStep(currentChain, purpose);
+        data = utf8(JSON.stringify(payload));
+        step = await ratchetStep(ratchet.sendChain);
+        const encrypted = await aesGcmEncryptBytes(step.messageKey, data, utf8(headerB64));
 
-        try {
-          const encrypted = await aesGcmEncryptBytes(step.messageKey, data, utf8(headerB64));
-          state.ratchet.sendChain = step.nextChain;
-          state.ratchet.sendSeq = seq;
-          zeroBytes(currentChain);
-          zeroBytes(step.messageKey);
-          return 'r2.' + headerB64 + '.' + bytesToBase64Url(encrypted.iv) + '.' + bytesToBase64Url(encrypted.ciphertext);
-        } catch (err) {
+        const oldSendChain = ratchet.sendChain;
+        ratchet.sendChain = step.nextChain;
+        ratchet.sendSeq = messageNumber + 1;
+        step.nextChain = null;
+        zeroBytes(oldSendChain);
+        zeroBytes(step.messageKey);
+
+        commitRatchetState(ratchet, generation);
+        return 'r2.' + headerB64 + '.' + bytesToBase64Url(encrypted.iv) + '.' + bytesToBase64Url(encrypted.ciphertext);
+      } catch (err) {
+        wipeRatchetState(ratchet);
+        if (step) {
           zeroBytes(step.nextChain);
           zeroBytes(step.messageKey);
-          throw err;
         }
+        throw err;
+      } finally {
+        zeroBytes(data);
+      }
+    }
+
+    async function decryptDoubleRatchetPayloadNow(parts, header) {
+      const generation = Number(state.cryptoGeneration) || 0;
+      const ratchet = cloneRatchetState(state.ratchet);
+      const dir = getRatchetDirection();
+      const remoteJwk = normalizeRatchetPublic(header.dh);
+      const remoteText = canonicalRatchetPublic(remoteJwk);
+      const messageNumber = Number(header.n);
+      const previousChainLength = Number(header.pn);
+      const iv = base64UrlToBytes(parts[2]);
+      const ciphertext = base64UrlToBytes(parts[3]);
+      let messageKey = null;
+      let plain = null;
+      let step = null;
+
+      try {
+        if (ratchet.generation !== generation || ratchet.recvDirection !== dir.recv) {
+          throw new Error('Double Ratchet session generation or direction mismatch.');
+        }
+
+        const skippedId = skippedMessageKeyId(remoteText, messageNumber);
+        if (ratchet.skippedKeys instanceof Map && ratchet.skippedKeys.has(skippedId)) {
+          messageKey = ratchet.skippedKeys.get(skippedId);
+          plain = await aesGcmDecryptBytes(messageKey, iv, ciphertext, utf8(parts[1]));
+          const payload = JSON.parse(new TextDecoder().decode(plain));
+          ratchet.skippedKeys.delete(skippedId);
+          zeroBytes(messageKey);
+          messageKey = null;
+          commitRatchetState(ratchet, generation);
+          return { payload: payload, header: header };
+        }
+
+        if (remoteText !== ratchet.remotePublicText) {
+          await applyRemoteRatchet(ratchet, remoteJwk, previousChainLength, header.d);
+        }
+
+        if (messageNumber < ratchet.recvSeq) throw new Error('replayed Double Ratchet message.');
+        await skipMessageKeys(ratchet, messageNumber);
+        if (!ratchet.recvChain || ratchet.recvSeq !== messageNumber) {
+          throw new Error('Double Ratchet receive chain is out of sync.');
+        }
+
+        step = await ratchetStep(ratchet.recvChain);
+        messageKey = step.messageKey;
+        plain = await aesGcmDecryptBytes(messageKey, iv, ciphertext, utf8(parts[1]));
+        const payload = JSON.parse(new TextDecoder().decode(plain));
+
+        const oldRecvChain = ratchet.recvChain;
+        ratchet.recvChain = step.nextChain;
+        ratchet.recvSeq = messageNumber + 1;
+        step.nextChain = null;
+        zeroBytes(oldRecvChain);
+        zeroBytes(messageKey);
+        messageKey = null;
+
+        commitRatchetState(ratchet, generation);
+        return { payload: payload, header: header };
+      } catch (err) {
+        wipeRatchetState(ratchet);
+        if (step) {
+          zeroBytes(step.nextChain);
+          zeroBytes(step.messageKey);
+        }
+        zeroBytes(messageKey);
+        throw err;
+      } finally {
+        zeroBytes(plain);
+      }
+    }
+
+    async function encryptTransportPayload(payload) {
+      const dir = getRatchetDirection();
+
+      if (state.transportEpoch === 2) {
+        return queueDoubleRatchetOperation(() => encryptDoubleRatchetPayloadNow(payload));
       }
 
-      // Epoch 0 exists only as a short bootstrap transport. User input remains
-      // disabled until epoch 1 is mutually confirmed, but retaining this path
-      // makes the state machine explicit and keeps authenticated control support.
+      // Epoch 0 is a short bootstrap transport. User input remains disabled until
+      // the authenticated ECDH handshake activates the Double Ratchet.
       if (!state.transportKeyBytes) throw new Error('epoch 0 transport key is unavailable.');
       state.transportSendSeq = (Number(state.transportSendSeq) || 0) + 1;
-      const header = { v: 2, e: 0, d: dir.send, n: state.transportSendSeq };
+      const header = { v: 3, e: 0, d: dir.send, n: state.transportSendSeq };
       const headerB64 = bytesToBase64Url(utf8(JSON.stringify(header)));
-      const encrypted = await aesGcmEncryptBytes(state.transportKeyBytes, data, utf8(headerB64));
-      return 'r2.' + headerB64 + '.' + bytesToBase64Url(encrypted.iv) + '.' + bytesToBase64Url(encrypted.ciphertext);
+      const data = utf8(JSON.stringify(payload));
+      try {
+        const encrypted = await aesGcmEncryptBytes(state.transportKeyBytes, data, utf8(headerB64));
+        return 'r2.' + headerB64 + '.' + bytesToBase64Url(encrypted.iv) + '.' + bytesToBase64Url(encrypted.ciphertext);
+      } finally {
+        zeroBytes(data);
+      }
     }
 
     async function decryptTransportPayloadNow(blob) {
       const raw = String(blob || '');
 
-      // Setup handshake/control remains on g1 and the setup key.
+      // Setup handshake/control remains on g1 and the HKDF-separated setup key.
       if (!raw.startsWith('r2.')) {
         const key = state.setupKeyBytes || state.keyBytes;
         if (!key) throw new Error('setup key is unavailable.');
@@ -5410,82 +5796,55 @@ footer {
       }
 
       const parts = raw.split('.');
-      if (parts.length !== 4) throw new Error('invalid transport payload.');
-
-      const header = JSON.parse(new TextDecoder().decode(base64UrlToBytes(parts[1])));
-      const dir = getRatchetDirection();
-      if (!header || header.v !== 2 || header.d !== dir.recv) {
-        throw new Error('wrong transport direction or protocol version.');
+      if (parts.length !== 4 || parts[1].length > 1024 || parts[2].length > 64 || parts[3].length > 32768) {
+        throw new Error('invalid transport payload.');
       }
+
+      let header = null;
+      try {
+        header = JSON.parse(new TextDecoder().decode(base64UrlToBytes(parts[1])));
+      } catch (_) {
+        throw new Error('invalid authenticated transport header.');
+      }
+
+      const dir = getRatchetDirection();
+      if (!header || header.d !== dir.recv) {
+        throw new Error('wrong transport direction.');
+      }
+
+      if (Number(header.e) === 2) {
+        if (header.v !== 3 || state.transportEpoch !== 2) {
+          throw new Error('wrong Double Ratchet protocol version or epoch.');
+        }
+        if (!Number.isSafeInteger(Number(header.n)) || Number(header.n) < 0 ||
+            !Number.isSafeInteger(Number(header.pn)) || Number(header.pn) < 0) {
+          throw new Error('invalid Double Ratchet message counters.');
+        }
+        normalizeRatchetPublic(header.dh);
+        return queueDoubleRatchetOperation(() => decryptDoubleRatchetPayloadNow(parts, header));
+      }
+
+      if (Number(header.e) !== 0 || header.v !== 3) {
+        throw new Error('unsupported transport key epoch.');
+      }
+      if (state.transportEpoch === 2) throw new Error('late epoch 0 payload rejected.');
+      if (!state.transportKeyBytes) throw new Error('epoch 0 transport key is unavailable.');
 
       const seq = Number(header.n);
-      if (!Number.isSafeInteger(seq) || seq < 1) throw new Error('invalid transport sequence.');
-
-      const iv = base64UrlToBytes(parts[2]);
-      const ciphertext = base64UrlToBytes(parts[3]);
-
-      if (Number(header.e) === 1) {
-        if (!state.ratchet || !state.ratchet.dhMixed || !state.ratchet.recvChain) {
-          throw new Error('forward-secure receive ratchet is not ready.');
-        }
-
-        const expectedSeq = (Number(state.ratchet.recvSeq) || 0) + 1;
-        if (seq < expectedSeq) throw new Error('replayed ratchet message.');
-        if (seq - expectedSeq > MAX_RATCHET_SKIP) throw new Error('ratchet sequence gap is too large.');
-
-        // A transport send can fail after local encryption has advanced the send
-        // chain. Derive across a small authenticated gap, but commit none of the
-        // provisional chain state unless the target ciphertext authenticates.
-        const currentChain = state.ratchet.recvChain;
-        let workingChain = new Uint8Array(currentChain);
-        let targetMessageKey = null;
-        let targetNextChain = null;
-
-        try {
-          for (let currentSeq = expectedSeq; currentSeq <= seq; currentSeq += 1) {
-            const purpose = 'epoch1|' + dir.recv + '|' + currentSeq;
-            const step = await ratchetStep(workingChain, purpose);
-            zeroBytes(workingChain);
-
-            if (currentSeq === seq) {
-              targetMessageKey = step.messageKey;
-              targetNextChain = step.nextChain;
-            } else {
-              // Permanently discard skipped message keys. This preserves forward
-              // secrecy and treats a missing ordered packet as irrecoverable.
-              zeroBytes(step.messageKey);
-              workingChain = step.nextChain;
-            }
-          }
-
-          const plain = await aesGcmDecryptBytes(targetMessageKey, iv, ciphertext, utf8(parts[1]));
-          const payload = JSON.parse(new TextDecoder().decode(plain));
-          state.ratchet.recvChain = targetNextChain;
-          state.ratchet.recvSeq = seq;
-          zeroBytes(currentChain);
-          zeroBytes(targetMessageKey);
-          zeroBytes(plain);
-          return { payload, header };
-        } catch (err) {
-          zeroBytes(workingChain);
-          zeroBytes(targetNextChain);
-          zeroBytes(targetMessageKey);
-          throw err;
-        }
-      }
-
-      if (Number(header.e) !== 0) throw new Error('unsupported transport key epoch.');
-      if (state.transportEpoch === 1) throw new Error('late epoch 0 payload rejected.');
-      if (!state.transportKeyBytes) throw new Error('epoch 0 transport key is unavailable.');
-      if (seq <= state.transportRecvSeq || seq - state.transportRecvSeq > 512) {
+      if (!Number.isSafeInteger(seq) || seq < 1 || seq <= state.transportRecvSeq || seq - state.transportRecvSeq > 512) {
         throw new Error('invalid epoch 0 transport sequence.');
       }
 
+      const iv = base64UrlToBytes(parts[2]);
+      const ciphertext = base64UrlToBytes(parts[3]);
       const plain = await aesGcmDecryptBytes(state.transportKeyBytes, iv, ciphertext, utf8(parts[1]));
-      const payload = JSON.parse(new TextDecoder().decode(plain));
-      state.transportRecvSeq = seq;
-      zeroBytes(plain);
-      return { payload, header };
+      try {
+        const payload = JSON.parse(new TextDecoder().decode(plain));
+        state.transportRecvSeq = seq;
+        return { payload: payload, header: header };
+      } finally {
+        zeroBytes(plain);
+      }
     }
 
     async function decryptTransportPayload(blob) {
