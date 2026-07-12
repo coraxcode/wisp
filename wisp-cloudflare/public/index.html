@@ -821,7 +821,7 @@ footer {
         <input id="usePassword" type="checkbox" />
         <span><strong style="color: var(--text)">Protect with a password.</strong> The other person will need it to enter. The password never leaves the two browsers.</span>
       </label>
-      <input id="passwordInput" class="hidden" type="password" maxlength="8" placeholder="password: 4 to 8 letters or numbers" autocomplete="off"
+      <input id="passwordInput" class="hidden" type="password" maxlength="64" placeholder="password: 6 to 64 characters, no spaces" autocomplete="off"
   style="width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); padding: .618rem 1rem; font: inherit; outline: none;" />
 
     <label class="check">
@@ -1023,7 +1023,7 @@ footer {
     <section id="viewPass" class="card hidden">
       <span class="step-label">password required</span>
       <p class="lead"><strong>This room is protected.</strong> Type the password you received to open the encrypted room.</p>
-      <input id="roomPassInput" type="password" maxlength="8" placeholder="password: 4 to 8 letters or numbers" autocomplete="off"
+      <input id="roomPassInput" type="password" maxlength="64" placeholder="password: 6 to 64 characters, no spaces" autocomplete="off"
         style="width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); padding: .618rem 1rem; font: inherit; outline: none;" />
       <div class="row">
         <button id="roomPassBtn" class="primary" type="button">Enter room</button>
@@ -1135,15 +1135,15 @@ footer {
 
   <div id="focusGuardOverlay" class="focus-guard-overlay" aria-hidden="true"></div>
 
-  <script>
+  <script id="wispAppScript">
     'use strict';
 
     const APP_ID = 'wisp-gas-cache-live-chat';
-    const VERSION = 3;
+    const VERSION = 6;
     const WEB_APP_URL = '<?= webAppUrl ?>';
     const ICE_WAIT_MS = 30000;
     const TURN_TEST_TIMEOUT_MS = 20000;
-    const HELLO_TIMEOUT_MS = 15000;
+    const HELLO_TIMEOUT_MS = 45000;
     const TOR_HELLO_TIMEOUT_MS = 60000;
     const TOR_HELLO_RETRY_MS = 3000;
     const POLL_MS = 1500;
@@ -1154,6 +1154,7 @@ footer {
     const TOR_CLEAR_EXTRA_MS = 2500;   // extra time so Tor messages are delivered before local erase
     const TOR_PRESENCE_MS = 5000;
     const TOR_PEER_TIMEOUT_MS = 45000; // Tor/Apps Script can be slow; avoid false disconnects during setup
+    const TOR_MAX_TEXT_UTF8_BYTES = 3000; // keeps encrypted Tor blobs below the 5000-char Code.gs mailbox limit
     // These two are chosen by whoever creates the room, then shared with the other
     // side inside the encrypted offer, so BOTH browsers always use the same values.
     let CLEAR_DELAY_MS = 3000;              // 0 = never auto-erase; otherwise 1..10 seconds
@@ -1161,6 +1162,7 @@ footer {
     let IDLE_LIMIT_MS = 10 * 60 * 1000;     // room ends after N minutes of silence
     const PANIC_ESC_WINDOW_MS = 1500;       // second Esc press must come within 1.5 seconds
     const ROOM_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const MAX_RATCHET_SKIP = 128;      // bounded recovery after a failed/lost queued send
 
     const $ = id => document.getElementById(id);
     const el = {
@@ -1220,11 +1222,11 @@ footer {
       focusGuardNotifyRequired: false,
       focusGuardShowText: true,
       focusGuardLocked: false,
-      focusGuardControlGraceUntil: 0,
-      focusGuardOverlayTapAt: 0,
       focusGuardLastAlertAt: 0,
       focusGuardLastAlertReason: '',
       focusGuardSeenAlertIds: {},
+      focusGuardSafeControlUntil: 0,
+      focusGuardDeferredBlurTimer: null,
       room: '',
       token: '',
       secretBytes: null,
@@ -1240,9 +1242,23 @@ footer {
       setupKeyBytes: null,
       safetyKeyBytes: null,
       ratchetRootBytes: null,
-      transportKeyBytes: null,
+      transportKeyBytes: null,       // epoch 0 bootstrap transport key
+      transportEpoch: 0,             // 0 = bootstrap, 1 = ECDH + symmetric ratchet
       transportSendSeq: 0,
       transportRecvSeq: 0,
+      transportSendQueue: Promise.resolve(),
+      transportRecvQueue: Promise.resolve(),
+      setupSendQueue: Promise.resolve(),
+      cryptoGeneration: 0,
+      ratchetInitPromise: null,
+      ratchetMixQueue: Promise.resolve(),
+      peerCodeVerified: false,
+      epoch1ReadySent: false,
+      epoch1RemoteReady: false,
+      epoch1AckSent: false,
+      epoch1RemoteAck: false,
+      epoch1Transcript: '',
+      preverifiedMessages: [],
       ratchet: null,
       passwordPending: false,
       safetyEnabled: true,
@@ -1251,6 +1267,9 @@ footer {
       idleEndTimer: null,
       helloTimer: null,
       helloRetryTimer: null,
+      helloSendBusy: false,
+      lastProtocolErrorAt: 0,
+      lastProtocolErrorText: '',
       lifetimeMinutes: 0,
       lifetimeDeadline: 0,
       lifetimeTick: null,
@@ -1268,6 +1287,7 @@ footer {
       torPeerLastSeenAt: 0,
       torPeerLost: false,
       torPendingJoin: false,
+      torSafetyRequested: true,
       manualMode: false,
       manualInvitePending: false,
       manualPendingOfferBlob: '',
@@ -1298,6 +1318,22 @@ footer {
     function log(text, kind) {
       el.log.textContent = text;
       el.log.className = 'log' + (kind ? ' ' + kind : '');
+    }
+
+    function reportProtocolError(context, err, kind, force) {
+      const detail = errorText(err);
+      const key = String(context || 'protocol error') + '|' + detail;
+      const now = Date.now();
+
+      // Do not flood the UI while typing or polling. Repeated identical errors
+      // are shown at most once every five seconds.
+      if (force || key !== state.lastProtocolErrorText || now - state.lastProtocolErrorAt > 5000) {
+        state.lastProtocolErrorText = key;
+        state.lastProtocolErrorAt = now;
+        log(String(context || 'protocol error') + ': ' + detail, kind || 'bad');
+      }
+
+      try { console.error('[Wisp] ' + String(context || 'protocol error'), err); } catch (_) {}
     }
 
     const WISP_SERVER_METHODS = new Set([
@@ -1752,6 +1788,7 @@ footer {
     function setupDataChannel(channel) {
       state.dc = channel;
       channel.addEventListener('open', () => {
+        if (state.dc !== channel || state.localClosing) return;
         state.connected = true;
         clearTimeout(state.watchdogTimer);
         setStatus('connected', 'on');
@@ -1761,8 +1798,11 @@ footer {
         showSafetyCode();
         startLifetime();
         resetIdleTimer();
-        sendHello();
+
+        // Start the timeout before the first hello. Even if WebCrypto fails,
+        // the session cannot remain stuck forever with peerVerified=false.
         startHelloWatchdog();
+        void sendHandshakeProgress();
         tryCleanupRoom();
       });
       channel.addEventListener('message', async event => {
@@ -1781,7 +1821,13 @@ footer {
 
           const decoded = await decryptTransportPayload(raw);
           await handleMessage(decoded.payload, decoded.header);
-        } catch (_) { /* anything that does not open with our key is ignored */ }
+        } catch (err) {
+          reportProtocolError(
+            state.peerVerified ? 'encrypted message rejected' : 'secure handshake message rejected',
+            err,
+            state.peerVerified ? 'warn' : 'bad'
+          );
+        }
       });
       channel.addEventListener('close', () => {
       const wasConnected = state.connected;
@@ -1800,16 +1846,84 @@ footer {
     // In Tor mode there is no DataChannel. send() writes an encrypted blob to the
     // server mailbox; a polling loop reads the other mailbox and feeds handleMessage.
 
+    function queueTorSendOperation(operation) {
+      // Recover from any previous rejection before queueing the next operation.
+      // The returned task still rejects for the current caller, while the stored
+      // tail is always recovered so a temporary server error cannot kill the room.
+      const task = Promise.resolve(state.torSendChain)
+        .catch(() => undefined)
+        .then(operation);
+
+      state.torSendChain = task.catch(() => undefined);
+      return task;
+    }
+
+    function hasActiveTransportKeyMaterial() {
+      if (state.transportEpoch === 1) {
+        return !!(
+          state.ratchet &&
+          state.ratchet.dhMixed &&
+          state.ratchet.sendChain &&
+          state.ratchet.recvChain
+        );
+      }
+
+      return !!state.transportKeyBytes;
+    }
+
+    // Code.gs validates Tor mailbox entries using the established r1 four-part
+    // shape. The browser transport is r2 because its authenticated header carries
+    // epoch-1 ratchet metadata. For Tor only, adapt the mailbox prefix without
+    // changing the header, IV, ciphertext or authentication tag. The receiver
+    // restores r2 before parsing and authenticating the packet. Setup packets (g1)
+    // pass through unchanged.
+    function encodeTorMailboxBlob(blob) {
+      const raw = String(blob || '');
+
+      if (raw.startsWith('g1.')) return raw;
+      if (raw.startsWith('r2.')) return 'r1.' + raw.slice(3);
+
+      throw new Error('unsupported Tor mailbox payload format.');
+    }
+
+    function decodeTorMailboxBlob(blob) {
+      const raw = String(blob || '');
+
+      if (raw.startsWith('r1.')) return 'r2.' + raw.slice(3);
+      if (raw.startsWith('r2.') || raw.startsWith('g1.')) return raw;
+
+      throw new Error('unsupported Tor mailbox payload format.');
+    }
+
+    function truncateUtf8(text, maxBytes) {
+      const limit = Math.max(0, Number(maxBytes) || 0);
+      let result = '';
+      let used = 0;
+
+      for (const character of String(text || '')) {
+        const size = utf8(character).length;
+        if (used + size > limit) break;
+        result += character;
+        used += size;
+      }
+
+      return result;
+    }
+
     async function torSend(message) {
-      if (!state.torMode || !state.keyBytes) return false;
-      // Chain sends so blobs keep their order even if two are fired quickly.
-      state.torSendChain = state.torSendChain.then(async () => {
-        try {
-          const blob = await encryptTransportPayload(message);
-          await server('gasTorSend', state.room, state.token, state.torBox, blob);
-        } catch (_) {}
-      });
-      return state.torSendChain.then(() => true).catch(() => false);
+      if (!state.torMode || !hasActiveTransportKeyMaterial()) return false;
+
+      try {
+        await queueTorSendOperation(async () => {
+          const transportBlob = await encryptTransportPayload(message);
+          const mailboxBlob = encodeTorMailboxBlob(transportBlob);
+          await server('gasTorSend', state.room, state.token, state.torBox, mailboxBlob);
+        });
+        return true;
+      } catch (err) {
+        reportProtocolError('Tor message could not be sent', err, 'warn');
+        return false;
+      }
     }
 
     function startTorPolling() {
@@ -1827,12 +1941,21 @@ footer {
                 if (item.seq <= state.torSeq) continue;
                 state.torSeq = item.seq;
                 try {
-                  const decoded = await decryptTransportPayload(String(item.blob || ''));
+                  const transportBlob = decodeTorMailboxBlob(String(item.blob || ''));
+                  const decoded = await decryptTransportPayload(transportBlob);
                   await handleMessage(decoded.payload, decoded.header);
-                } catch (_) { /* not ours or corrupt: ignore */ }
+                } catch (err) {
+                  reportProtocolError(
+                    state.peerVerified ? 'Tor encrypted message rejected' : 'Tor secure handshake message rejected',
+                    err,
+                    state.peerVerified ? 'warn' : 'bad'
+                  );
+                }
               }
             }
-          } catch (_) {}
+          } catch (err) {
+            reportProtocolError('Tor polling temporarily failed', err, 'warn');
+          }
           inFlight = false;
         }
         state.torPollTimer = setTimeout(tick, TOR_POLL_MS);
@@ -1908,14 +2031,25 @@ footer {
       state.torPendingTyping = null;
       state.torTypingFlushBusy = true;
       state.torLastTypingSentAt = Date.now();
+      let sent = false;
 
       try {
-        await send(message);
+        sent = await send(message);
       } finally {
         state.torTypingFlushBusy = false;
 
+        // Preserve the newest unsent text after a temporary Apps Script error.
+        // A newer local edit always wins over this older retry.
+        if (!sent && state.torMode && state.connected) {
+          const pendingSeq = Number(state.torPendingTyping && state.torPendingTyping.seq) || 0;
+          const failedSeq = Number(message && message.seq) || 0;
+          if (!state.torPendingTyping || failedSeq >= pendingSeq) {
+            state.torPendingTyping = message;
+          }
+        }
+
         if (state.torPendingTyping) {
-          scheduleTorTypingFlush();
+          scheduleTorTypingFlush(sent ? undefined : 2000);
         }
       }
     }
@@ -1940,21 +2074,39 @@ footer {
       el.myText.disabled = true;
       el.myText.placeholder = 'verifying secure session...';
 
-      await sendHello();
       startHelloWatchdog();
+      void sendHandshakeProgress();
     }
 
     async function send(message) {
       if (state.torMode) return torSend(message);
-      // Defense in depth: every chat message is encrypted by Wisp's
-      // HKDF-separated ratchet layer BEFORE entering the WebRTC DataChannel
-      // (which is itself protected by DTLS).
-      if (!state.dc || state.dc.readyState !== 'open' || !state.keyBytes) return false;
+
+      if (!state.dc || state.dc.readyState !== 'open' || !hasActiveTransportKeyMaterial()) {
+        if (state.connected) {
+          reportProtocolError('message could not be sent', new Error('secure channel is not open.'), 'warn');
+        }
+        return false;
+      }
+
+      const task = Promise.resolve(state.transportSendQueue)
+        .catch(() => undefined)
+        .then(async () => {
+          if (!state.dc || state.dc.readyState !== 'open') {
+            throw new Error('DataChannel closed before the message was queued.');
+          }
+          const blob = await encryptTransportPayload(message);
+          state.dc.send(blob);
+          return true;
+        });
+
+      state.transportSendQueue = task.catch(() => undefined);
+
       try {
-        const blob = await encryptTransportPayload(message);
-        state.dc.send(blob);
-        return true;
-      } catch (_) { return false; }
+        return await task;
+      } catch (err) {
+        reportProtocolError('message could not be encrypted or queued', err, 'warn');
+        return false;
+      }
     }
 
     async function handleMessage(message, transportHeader) {
@@ -1966,7 +2118,8 @@ footer {
       // Code.gs deployments that accept only g1 setup blobs can still open the
       // creator screen. It contains no chat text.
       const setupOnly = !transportHeader;
-      if (setupOnly && message.type !== 'hello' && message.type !== 'joined') return;
+      const allowedSetupTypes = new Set(['epochHandshake', 'joined']);
+      if (setupOnly && !allowedSetupTypes.has(message.type)) return;
 
       if (state.torMode) {
         markTorPeerAlive();
@@ -1985,24 +2138,34 @@ footer {
         return;
       }
 
-      if (message.type === 'hello') {
-        // Accept exactly one setup hello. A later hello with a new DH key could
-        // reset the ratchet mid-session and desynchronize valid messages.
-        if (state.peerVerified) return;
-
-        clearTimeout(state.helloTimer);
-        await mixRatchetRemotePublic((transportHeader && transportHeader.dh) || message.dh || null);
-        await verifyPeerVersion(message);
+      if (message.type === 'epochHandshake') {
+        try {
+          await handleEpoch1Handshake(message);
+        } catch (err) {
+          reportProtocolError('forward-secure handshake packet was rejected', err, 'bad');
+        }
         return;
       }
+
+      // Version 6 accepts only the cumulative epochHandshake packet.
+      // Legacy split hello/ready/ack packets are ignored before they can bind ECDH state.
 
       if (message.type === 'joined') {
         await openTorChatIfWaiting();
         return;
       }
 
-      // Do not accept chat/typing messages before the other side proves it runs the same code.
-      if (!state.peerVerified) return;
+      // A valid epoch-1 application payload may cross the final ready/ack messages.
+      // Keep a small bounded queue instead of silently discarding it.
+      if (!state.peerVerified) {
+        if (transportHeader && Number(transportHeader.e) === 1) {
+          if (!Array.isArray(state.preverifiedMessages)) state.preverifiedMessages = [];
+          if (state.preverifiedMessages.length < 64) {
+            state.preverifiedMessages.push({ message: message, header: transportHeader });
+          }
+        }
+        return;
+      }
 
       resetIdleTimer();
 
@@ -2153,10 +2316,10 @@ footer {
       if (!window.crypto || !crypto.subtle) { log('this browser does not support WebCrypto.', 'bad'); return; }
 
       const wantsPassword = el.usePassword.checked;
-      const password = String(el.passwordInput.value || '').trim();
+      const password = String(el.passwordInput.value || '');
 
-      if (wantsPassword && !/^[A-Za-z0-9]{4,8}$/.test(password)) {
-        log('password must be 4 to 8 letters or numbers.', 'bad');
+      if (wantsPassword && !/^[\x21-\x7E]{6,64}$/.test(password)) {
+        log('password must be 6 to 64 printable characters with no spaces.', 'bad');
         el.passwordInput.focus();
         return;
       }
@@ -2176,7 +2339,9 @@ footer {
       loadGhostFromUi();
       loadFocusGuardFromUi();
       state.focusGuardRequired = !!state.focusGuardOn;
-      state.focusGuardNotifyRequired = !!state.focusGuardNotify;
+      // Only the main Focus Guard shield is a room policy. The alert and
+      // overlay-text options remain local privacy preferences during the chat.
+      state.focusGuardNotifyRequired = false;
       syncFocusGuardUi();
       state.room = '';
       state.token = '';
@@ -2441,13 +2606,13 @@ footer {
       }
 
       const wantsPassword = el.usePassword.checked;
-      const password = String(el.passwordInput.value || '').trim();
+      const password = String(el.passwordInput.value || '');
 
       // Tor + password is supported: the key is derived from the password below,
       // and the Tor link carries &p=1 so the other side is prompted for it.
 
-      if (wantsPassword && !/^[A-Za-z0-9]{4,8}$/.test(password)) {
-        log('password must be 4 to 8 letters or numbers.', 'bad');
+      if (wantsPassword && !/^[\x21-\x7E]{6,64}$/.test(password)) {
+        log('password must be 6 to 64 printable characters with no spaces.', 'bad');
         el.passwordInput.focus();
         return;
       }
@@ -2476,7 +2641,9 @@ footer {
       loadGhostFromUi();
       loadFocusGuardFromUi();
       state.focusGuardRequired = !!state.focusGuardOn;
-      state.focusGuardNotifyRequired = !!state.focusGuardNotify;
+      // Only the main Focus Guard shield is a room policy. The alert and
+      // overlay-text options remain local privacy preferences during the chat.
+      state.focusGuardNotifyRequired = false;
       syncFocusGuardUi();
 
       if (state.torMode) {
@@ -2487,6 +2654,7 @@ footer {
       state.torBox = 'a2b';
       state.torReadBox = 'b2a';
       state.torSeq = 0;
+      state.torSafetyRequested = !!(el.useSafety && el.useSafety.checked);
 
       try {
         await server('gasTorCreateRoom', state.room, state.token);
@@ -2498,6 +2666,9 @@ footer {
         return;
       }
 
+      // Hidden during setup. Tor Mode enables and shows the safety code after
+      // the forward-secure epoch 1 handshake is verified, because the
+      // code is derived from the ephemeral ECDH keys, not from DTLS.
       state.safetyEnabled = false;
       applyEraseSeconds(el.eraseSelect.value);
       applyDurationMinutes(el.durationSelect.value);
@@ -2631,6 +2802,8 @@ footer {
           return false;
         }
         if (!res || !res.ok) throw new Error((res && res.error) || 'could not join.');
+        // Hidden during setup. Enabled after hello verification — the Tor
+        // safety code comes from the ephemeral ECDH keys after epoch 1 verification.
         state.safetyEnabled = false;
         state.peerVerified = false;
         state.connected = true;
@@ -2651,10 +2824,8 @@ footer {
         const joinedOk = await sendSetupMessage({ type: 'joined' });
         if (!joinedOk) throw new Error('could not notify the creator that you joined.');
 
-        const helloOk = await sendHello();
-        if (!helloOk) throw new Error('could not start secure verification.');
-
         startHelloWatchdog();
+        void sendHandshakeProgress();
 
         setStatus('connected (Tor)', 'on');
         log('connected through Tor. messages relay encrypted through the server.', 'ok');
@@ -2722,6 +2893,11 @@ footer {
           notify: params.get('fgn') === '1',
           showText: params.get('fgt') !== '0'
         });
+
+        state.torSafetyRequested = params.get('sc') !== '0';
+        applyEraseSeconds(params.has('er') ? params.get('er') : 3);
+        applyDurationMinutes(params.has('du') ? params.get('du') : 10);
+        state.lifetimeMinutes = applyLifetimeMinutes(params.has('lt') ? params.get('lt') : 0);
       }
 
       if (params.get('p') === '1') {
@@ -2746,9 +2922,9 @@ footer {
 
     async function joinWithPassword() {
       if (!state.secretBytes) { log('session was cancelled. open the link again.', 'bad'); return; }
-      const password = String(el.roomPassInput.value || '').trim();
-      if (!/^[A-Za-z0-9]{4,8}$/.test(password)) {
-        log('the password is 4 to 8 letters or numbers.', 'bad');
+      const password = String(el.roomPassInput.value || '');
+      if (!/^[\x21-\x7E]{6,64}$/.test(password)) {
+        log('the password is 6 to 64 printable characters with no spaces.', 'bad');
         el.roomPassInput.focus();
         return;
       }
@@ -2770,7 +2946,24 @@ footer {
       const secret = bytesToBase64Url(state.secretBytes);
       const unevaluated = WEB_APP_URL.indexOf('<' + '?') !== -1;
       const baseUrl = (WEB_APP_URL && !unevaluated ? WEB_APP_URL : location.href.split('#')[0]);
-      state.linkValue = baseUrl + '#r=' + encodeURIComponent(state.room) + '&k=' + encodeURIComponent(secret) + '&t=' + encodeURIComponent(state.token) + '&x=tor' + (wantsPassword ? '&p=1' : '') + (state.focusGuardOn ? '&fg=1' : '') + (state.focusGuardNotify ? '&fgn=1' : '') + (state.focusGuardOn && !state.focusGuardShowText ? '&fgt=0' : '');
+      const eraseSeconds = applyEraseSeconds(el.eraseSelect ? el.eraseSelect.value : 3);
+      const durationMinutes = applyDurationMinutes(el.durationSelect ? el.durationSelect.value : 10);
+      const lifetimeMinutes = applyLifetimeMinutes(el.lifetimeSelect ? el.lifetimeSelect.value : 0);
+
+      state.linkValue = baseUrl
+        + '#r=' + encodeURIComponent(state.room)
+        + '&k=' + encodeURIComponent(secret)
+        + '&t=' + encodeURIComponent(state.token)
+        + '&x=tor'
+        + (wantsPassword ? '&p=1' : '')
+        + (state.torSafetyRequested ? '' : '&sc=0')
+        + '&er=' + encodeURIComponent(String(eraseSeconds))
+        + '&du=' + encodeURIComponent(String(durationMinutes))
+        + '&lt=' + encodeURIComponent(String(lifetimeMinutes))
+        + (state.focusGuardOn ? '&fg=1' : '')
+        + (state.focusGuardNotify ? '&fgn=1' : '')
+        + (state.focusGuardOn && !state.focusGuardShowText ? '&fgt=0' : '');
+
       el.roomLink.value = state.linkValue;
       revealLink(true);
       showView('viewShare');
@@ -2911,14 +3104,31 @@ footer {
     }
 
     async function computeSafetyCode() {
-      // Both browsers derive the same code from the DTLS certificate fingerprints
-      // of BOTH sides (sorted, so the order is identical on the two screens).
-      // If the two screens ever showed different codes, the connection would
-      // not be the same one — that is exactly what this code detects.
-      const local = state.pc && state.pc.localDescription ? state.pc.localDescription.sdp : '';
-      const remote = state.pc && state.pc.remoteDescription ? state.pc.remoteDescription.sdp : '';
-      const fingerprints = sdp => (String(sdp).match(/a=fingerprint:[^\r\n]+/g) || []).join('|');
-      const material = [fingerprints(local), fingerprints(remote)].sort().join('||');
+      // WebRTC modes: both browsers derive the same code from the DTLS
+      // certificate fingerprints of BOTH sides (sorted, so the order is
+      // identical on the two screens).
+      // Tor Mode: there is no DTLS, so the code is derived from the ephemeral
+      // ECDH public keys exchanged in the hello handshake (also sorted).
+      // In both cases, if the two screens ever showed different codes, the
+      // connection would not be the same one — that is exactly what this
+      // code detects.
+      let material = '';
+
+      if (state.torMode) {
+        if (!state.ratchet || !state.ratchet.dhMixed) {
+          throw new Error('tor safety code not ready.');
+        }
+        material = 'tor|' + [
+          canonicalRatchetPublic(state.ratchet.localPublicJwk),
+          state.ratchet.remotePublicText
+        ].sort().join('||');
+      } else {
+        const local = state.pc && state.pc.localDescription ? state.pc.localDescription.sdp : '';
+        const remote = state.pc && state.pc.remoteDescription ? state.pc.remoteDescription.sdp : '';
+        const fingerprints = sdp => (String(sdp).match(/a=fingerprint:[^\r\n]+/g) || []).join('|');
+        material = [fingerprints(local), fingerprints(remote)].sort().join('||');
+      }
+
       const digest = state.safetyKeyBytes
         ? await hmacSha256(state.safetyKeyBytes, 'safety-code|' + material)
         : new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(material)));
@@ -2939,49 +3149,118 @@ footer {
     let CODE_FINGERPRINT = '';
 
     async function ensureCodeFingerprint() {
-      // The fingerprint is the SHA-256 of this page's own source code, computed
-      // at runtime. Any edit to the code — even a single character — changes it
-      // automatically. No version number to remember to update.
+      // Hash only Wisp's own application script. Hosting platforms may inject
+      // extra <script> elements containing per-session data; hashing all scripts
+      // can therefore make two users of the same deployment look incompatible.
       if (CODE_FINGERPRINT) return CODE_FINGERPRINT;
+
       try {
-        const scripts = Array.from(document.querySelectorAll('script'));
-        const source = scripts.map(s => s.textContent || '').join('\n');
-        const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source)));
-        CODE_FINGERPRINT = Array.from(digest.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join('');
-      } catch (_) {
+        const appScript = document.getElementById('wispAppScript');
+        const source = appScript && typeof appScript.textContent === 'string'
+          ? appScript.textContent
+          : '';
+
+        if (!source) throw new Error('Wisp application source is unavailable.');
+
+        const digest = new Uint8Array(
+          await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source))
+        );
+        CODE_FINGERPRINT = Array.from(digest.slice(0, 16))
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('');
+      } catch (err) {
         CODE_FINGERPRINT = 'unavailable';
+        reportProtocolError('code fingerprint could not be calculated', err, 'bad', true);
       }
+
       return CODE_FINGERPRINT;
     }
 
     async function sendSetupMessage(message) {
-      // Setup/control messages such as hello must not depend on the ratchet state.
-      // Otherwise a race can happen: one side may mix the peer's DH key before
-      // sending its own hello, causing the other side to be unable to decrypt it.
-      // These messages still use the HKDF-separated setup key.
-      try {
-        const blob = await encryptSetupPayload(message);
+      // Bind every queued setup packet to the exact crypto/session generation
+      // that created it. This prevents an old asynchronous retry from being
+      // encrypted with a new room key or sent into a later room.
+      const generation = Number(state.cryptoGeneration) || 0;
+      const room = String(state.room || '');
+      const token = String(state.token || '');
+      const torMode = !!state.torMode;
+      const torBox = String(state.torBox || '');
+      const channel = state.dc;
 
-        if (state.torMode) {
-          state.torSendChain = state.torSendChain.then(async () => {
-            await server('gasTorSend', state.room, state.token, state.torBox, blob);
-          });
-          await state.torSendChain;
+      if (!(state.setupKeyBytes instanceof Uint8Array) || state.setupKeyBytes.length !== 32) {
+        reportProtocolError('secure setup message could not be sent', new Error('setup key is unavailable.'), 'warn');
+        return false;
+      }
+
+      const setupKeySnapshot = new Uint8Array(state.setupKeyBytes);
+      const task = Promise.resolve(state.setupSendQueue)
+        .catch(() => undefined)
+        .then(async () => {
+          if (generation !== state.cryptoGeneration) {
+            throw new Error('stale setup operation was cancelled.');
+          }
+
+          const blob = await encryptPayload(setupKeySnapshot, message);
+
+          if (generation !== state.cryptoGeneration) {
+            throw new Error('stale setup operation was cancelled.');
+          }
+
+          if (torMode) {
+            await queueTorSendOperation(async () => {
+              if (generation !== state.cryptoGeneration) {
+                throw new Error('stale Tor setup operation was cancelled.');
+              }
+              const mailboxBlob = encodeTorMailboxBlob(blob);
+              await server('gasTorSend', room, token, torBox, mailboxBlob);
+            });
+            return true;
+          }
+
+          if (!channel || channel !== state.dc || channel.readyState !== 'open') {
+            throw new Error('DataChannel is not open for this session.');
+          }
+
+          channel.send(blob);
           return true;
-        }
+        })
+        .finally(() => {
+          zeroBytes(setupKeySnapshot);
+        });
 
-        if (!state.dc || state.dc.readyState !== 'open') return false;
-        state.dc.send(blob);
-        return true;
-      } catch (_) {
+      state.setupSendQueue = task.catch(() => undefined);
+
+      try {
+        return await task;
+      } catch (err) {
+        if (generation === state.cryptoGeneration) {
+          reportProtocolError('secure setup message could not be sent', err, 'warn');
+        }
         return false;
       }
     }
 
     async function sendHello() {
-      const fp = await ensureCodeFingerprint();
-      const dh = await getRatchetPublicJwk();
-      return sendSetupMessage({ type: 'hello', version: VERSION, fp: fp, dh: dh });
+      if (state.peerVerified) return true;
+      if (state.helloSendBusy) return false;
+
+      state.helloSendBusy = true;
+      try {
+        const fp = await ensureCodeFingerprint();
+        if (!fp || fp === 'unavailable') {
+          throw new Error('local code fingerprint is unavailable.');
+        }
+
+        const dh = await getRatchetPublicJwk();
+        const sent = await sendSetupMessage({ type: 'hello', version: VERSION, fp: fp, dh: dh });
+        if (!sent) throw new Error('hello was not queued.');
+        return true;
+      } catch (err) {
+        reportProtocolError('secure hello could not be sent', err, 'warn');
+        return false;
+      } finally {
+        state.helloSendBusy = false;
+      }
     }
 
     function stopHelloRetry() {
@@ -2989,33 +3268,237 @@ footer {
       state.helloRetryTimer = null;
     }
 
+    async function buildEpoch1Transcript() {
+      if (!state.ratchet || !state.ratchet.dhMixed || !state.ratchet.rootKey) {
+        throw new Error('epoch 1 ECDH root is not ready.');
+      }
+
+      if (state.epoch1Transcript) return state.epoch1Transcript;
+
+      const fp = await ensureCodeFingerprint();
+      if (!fp || fp === 'unavailable') throw new Error('code fingerprint is unavailable.');
+
+      const localPub = canonicalRatchetPublic(state.ratchet.localPublicJwk);
+      const remotePub = String(state.ratchet.remotePublicText || '');
+      if (!localPub || !remotePub) throw new Error('epoch 1 public-key transcript is incomplete.');
+
+      const orderedPubs = [localPub, remotePub].sort().join('||');
+      const transcriptBytes = await sha256Bytes(
+        'wisp-epoch1-v4|' + APP_ID + '|' + VERSION + '|' + state.room + '|' +
+        state.token + '|' + fp + '|' + orderedPubs
+      );
+      state.epoch1Transcript = bytesToBase64Url(transcriptBytes);
+      zeroBytes(transcriptBytes);
+      return state.epoch1Transcript;
+    }
+
+    async function makeEpoch1Proof(kind, direction) {
+      if (!state.ratchet || !state.ratchet.rootKey) throw new Error('epoch 1 root key is unavailable.');
+      const transcript = await buildEpoch1Transcript();
+      const proof = await hmacSha256(
+        state.ratchet.rootKey,
+        'wisp-epoch1-proof-v4|' + String(kind) + '|' + String(direction) + '|' + transcript
+      );
+      const encoded = bytesToBase64Url(proof);
+      zeroBytes(proof);
+      return encoded;
+    }
+
+    function constantTimeBase64UrlEqual(left, right) {
+      let a;
+      let b;
+      try {
+        a = base64UrlToBytes(String(left || ''));
+        b = base64UrlToBytes(String(right || ''));
+      } catch (_) {
+        return false;
+      }
+
+      let diff = a.length ^ b.length;
+      const length = Math.max(a.length, b.length);
+      for (let i = 0; i < length; i += 1) {
+        diff |= (a[i] || 0) ^ (b[i] || 0);
+      }
+      zeroBytes(a);
+      zeroBytes(b);
+      return diff === 0;
+    }
+
+    async function verifyEpoch1Proof(message, kind) {
+      if (!message || Number(message.epoch) !== 1) throw new Error('invalid epoch negotiation message.');
+      const fp = await ensureCodeFingerprint();
+      if (String(message.fp || '') !== fp) throw new Error('epoch negotiation fingerprint mismatch.');
+
+      const expected = await makeEpoch1Proof(kind, getRatchetDirection().recv);
+      if (!constantTimeBase64UrlEqual(message.proof, expected)) {
+        throw new Error('epoch negotiation proof is invalid.');
+      }
+      return true;
+    }
+
+    async function sendEpoch1Ready() {
+      if (state.peerVerified) return true;
+      if (!state.peerCodeVerified || !state.ratchet || !state.ratchet.dhMixed) return false;
+
+      const fp = await ensureCodeFingerprint();
+      const proof = await makeEpoch1Proof('ready', getRatchetDirection().send);
+      const sent = await sendSetupMessage({ type: 'epochReady', epoch: 1, fp: fp, proof: proof });
+      if (sent) state.epoch1ReadySent = true;
+      return sent;
+    }
+
+    async function sendEpoch1Ack() {
+      if (state.peerVerified) return true;
+      if (!state.peerCodeVerified || !state.epoch1RemoteReady || !state.ratchet || !state.ratchet.dhMixed) return false;
+
+      const fp = await ensureCodeFingerprint();
+      const proof = await makeEpoch1Proof('ack', getRatchetDirection().send);
+      const sent = await sendSetupMessage({ type: 'epochAck', epoch: 1, fp: fp, proof: proof });
+      if (sent) state.epoch1AckSent = true;
+      return sent;
+    }
+
+    async function sendHandshakeProgress() {
+      if (state.peerVerified) return true;
+      if (state.helloSendBusy) return false;
+
+      const generation = Number(state.cryptoGeneration) || 0;
+      state.helloSendBusy = true;
+      try {
+        const fp = await ensureCodeFingerprint();
+        if (!fp || fp === 'unavailable') {
+          throw new Error('local code fingerprint is unavailable.');
+        }
+
+        const dh = await getRatchetPublicJwk();
+        if (generation !== state.cryptoGeneration) return false;
+
+        const packet = {
+          type: 'epochHandshake',
+          version: VERSION,
+          epoch: 1,
+          fp: fp,
+          dh: dh
+        };
+
+        const canProveReady = !!(
+          state.peerCodeVerified &&
+          state.ratchet &&
+          state.ratchet.generation === generation &&
+          state.ratchet.dhMixed &&
+          state.ratchet.rootKey
+        );
+
+        if (canProveReady) {
+          packet.readyProof = await makeEpoch1Proof('ready', getRatchetDirection().send);
+        }
+        if (canProveReady && state.epoch1RemoteReady) {
+          packet.ackProof = await makeEpoch1Proof('ack', getRatchetDirection().send);
+        }
+
+        if (generation !== state.cryptoGeneration) return false;
+        const sent = await sendSetupMessage(packet);
+        if (!sent || generation !== state.cryptoGeneration) return false;
+
+        if (packet.readyProof) state.epoch1ReadySent = true;
+        if (packet.ackProof) state.epoch1AckSent = true;
+        return await maybeActivateEpoch1();
+      } catch (err) {
+        if (generation === state.cryptoGeneration) {
+          reportProtocolError('forward-secure handshake could not be sent', err, 'warn');
+        }
+        return false;
+      } finally {
+        if (generation === state.cryptoGeneration) {
+          state.helloSendBusy = false;
+        }
+      }
+    }
+
+    async function handleEpoch1Handshake(message) {
+      if (state.peerVerified) return true;
+      if (!message || Number(message.epoch) !== 1) {
+        throw new Error('invalid forward-secure handshake epoch.');
+      }
+
+      const generation = Number(state.cryptoGeneration) || 0;
+      const mine = await ensureCodeFingerprint();
+      const theirs = String(message.fp || '');
+
+      if (!theirs) throw new Error('peer handshake is missing the code fingerprint.');
+      if (!mine || mine === 'unavailable') throw new Error('local code fingerprint is unavailable.');
+      if (Number(message.version) !== VERSION) {
+        stopHelloRetry();
+        await endSession(false);
+        log('session blocked: the other side is running an incompatible protocol version. both sides must reload the same deployment.', 'bad');
+        return false;
+      }
+      if (theirs !== mine) {
+        stopHelloRetry();
+        await endSession(false);
+        log('session blocked: the other side is running a different HTML build. both sides must reload the exact same deployment.', 'bad');
+        return false;
+      }
+
+      await mixRatchetRemotePublic(message.dh || null);
+      if (generation !== state.cryptoGeneration) return false;
+      state.peerCodeVerified = true;
+
+      if (message.readyProof) {
+        await verifyEpoch1Proof(
+          { epoch: 1, fp: theirs, proof: String(message.readyProof) },
+          'ready'
+        );
+        if (generation !== state.cryptoGeneration) return false;
+        state.epoch1RemoteReady = true;
+      }
+
+      if (message.ackProof) {
+        if (!state.epoch1RemoteReady && !message.readyProof) {
+          throw new Error('epoch acknowledgement arrived without a ready proof.');
+        }
+        await verifyEpoch1Proof(
+          { epoch: 1, fp: theirs, proof: String(message.ackProof) },
+          'ack'
+        );
+        if (generation !== state.cryptoGeneration) return false;
+        state.epoch1RemoteAck = true;
+      }
+
+      await sendHandshakeProgress();
+      if (generation !== state.cryptoGeneration) return false;
+      return await maybeActivateEpoch1();
+    }
+
     function startHelloWatchdog() {
       clearTimeout(state.helloTimer);
       stopHelloRetry();
 
+      const generation = Number(state.cryptoGeneration) || 0;
       const wasTorMode = !!state.torMode;
       const timeoutMs = wasTorMode ? TOR_HELLO_TIMEOUT_MS : HELLO_TIMEOUT_MS;
-
-      // A single setup message can be delayed or missed (a slow relay/TURN open,
-      // a DH-mix race, or Apps Script polling). Resend hello until the peer confirms,
-      // in BOTH WebRTC and Tor, so one lost hello never causes a FALSE "different
-      // version" failure. This never resends chat text.
       const retryMs = wasTorMode ? TOR_HELLO_RETRY_MS : 1000;
+
       state.helloRetryTimer = setInterval(() => {
+        if (generation !== state.cryptoGeneration) {
+          stopHelloRetry();
+          return;
+        }
         if (state.peerVerified) {
           stopHelloRetry();
           return;
         }
-        sendHello();
+        void sendHandshakeProgress();
       }, retryMs);
 
       state.helloTimer = setTimeout(async () => {
+        if (generation !== state.cryptoGeneration || state.peerVerified) return;
         stopHelloRetry();
         await endSession(false);
         log(
           wasTorMode
-            ? 'session blocked: the other side did not confirm its code version in Tor Mode. both must use the exact same deployment, and Apps Script/CacheService must be responding.'
-            : 'session blocked: the other side did not confirm its code version. both must use the exact same deployment.',
+            ? 'session blocked: the forward-secure epoch 1 handshake did not complete in Tor Mode. create a new room and confirm both tabs use this exact deployment.'
+            : 'session blocked: the forward-secure epoch 1 handshake did not complete. create a new room and confirm both tabs use this exact deployment.',
           'bad'
         );
       }, timeoutMs);
@@ -3023,41 +3506,124 @@ footer {
 
     async function verifyPeerVersion(message) {
       const mine = await ensureCodeFingerprint();
-      const theirs = String(message.fp || '');
+      const theirs = String(message && message.fp || '');
 
-      if (theirs && mine !== 'unavailable' && theirs === mine) {
-        clearTimeout(state.helloTimer);
-        state.helloTimer = null;
+      if (!theirs) throw new Error('peer hello is missing the code fingerprint.');
+      if (!mine || mine === 'unavailable') throw new Error('local code fingerprint is unavailable.');
+      if (Number(message && message.version) !== VERSION) throw new Error('peer protocol version is incompatible.');
+
+      if (theirs !== mine) {
         stopHelloRetry();
-
-        state.peerVerified = true;
-        el.myText.disabled = false;
-        state.ghostPri = Math.floor(Math.random() * 1e9);
-        applyGhostChrome();
-        applyMyTextLock();
-
-        if (state.keyguardOn && el.keyguardDraft) {
-          el.myText.placeholder = 'KeyGuard Pad is active — use the private draft below.';
-          el.keyguardDraft.focus();
-        } else {
-          el.myText.placeholder = 'type here — every keystroke is sent live…';
-          el.myText.focus();
-        }
-
-        ghostSyncIfCreator();
-
-        if (state.torMode) {
-          markTorPeerAlive();
-          startTorPresence();
-        }
-
-        log('version check passed — both sides run the exact same code.', 'ok');
-        return;
+        await endSession(false);
+        log('session blocked: the other side is running a DIFFERENT version of the code. both must use the exact same deployment.', 'bad');
+        return false;
       }
 
+      state.peerCodeVerified = true;
+      await sendEpoch1Ready();
+      return true;
+    }
+
+    async function handleEpoch1Ready(message) {
+      if (state.peerVerified) return true;
+      if (!state.peerCodeVerified || !state.ratchet || !state.ratchet.dhMixed) {
+        throw new Error('epochReady arrived before a verified hello.');
+      }
+
+      await verifyEpoch1Proof(message, 'ready');
+      state.epoch1RemoteReady = true;
+      await sendEpoch1Ack();
+      return maybeActivateEpoch1();
+    }
+
+    async function handleEpoch1Ack(message) {
+      if (state.peerVerified) return true;
+      if (!state.peerCodeVerified || !state.ratchet || !state.ratchet.dhMixed) {
+        throw new Error('epochAck arrived before a verified hello.');
+      }
+
+      await verifyEpoch1Proof(message, 'ack');
+      state.epoch1RemoteAck = true;
+      return maybeActivateEpoch1();
+    }
+
+    async function maybeActivateEpoch1() {
+      if (state.peerVerified) return true;
+
+      const ready = !!(
+        state.peerCodeVerified &&
+        state.epoch1ReadySent &&
+        state.epoch1RemoteReady &&
+        state.epoch1AckSent &&
+        state.epoch1RemoteAck &&
+        state.ratchet &&
+        state.ratchet.dhMixed &&
+        state.ratchet.sendChain &&
+        state.ratchet.recvChain
+      );
+
+      if (!ready) return false;
+
+      state.transportEpoch = 1;
+      state.peerVerified = true;
+      state.lastProtocolErrorAt = 0;
+      state.lastProtocolErrorText = '';
+
+      // Epoch 0 and the master/bootstrap material are no longer needed after
+      // mutual ECDH confirmation. Erasing them is essential: retaining the
+      // master key, the ECDH root or the private ECDH key would allow a later
+      // compromise of this tab to reconstruct the beginning of the epoch-1
+      // chains and defeat forward secrecy for earlier messages.
+      zeroBytes(state.transportKeyBytes);
+      state.transportKeyBytes = null;
+      zeroBytes(state.ratchetRootBytes);
+      state.ratchetRootBytes = null;
+      zeroBytes(state.ratchet.rootKey);
+      state.ratchet.rootKey = null;
+      state.ratchet.localKeyPair = null;
+      zeroBytes(state.keyBytes);
+      zeroBytes(state.secretBytes);
+      state.keyBytes = null;
+      state.secretBytes = null;
+
+      clearTimeout(state.helloTimer);
+      state.helloTimer = null;
       stopHelloRetry();
-      await endSession(false);
-      log('session blocked: the other side is running a DIFFERENT version of the code. both must use the exact same deployment.', 'bad');
+
+      el.myText.disabled = false;
+      state.ghostPri = Math.floor(Math.random() * 1e9);
+      applyGhostChrome();
+      applyMyTextLock();
+
+      if (state.keyguardOn && el.keyguardDraft) {
+        el.myText.placeholder = 'KeyGuard Pad is active — use the private draft below.';
+        el.keyguardDraft.focus();
+      } else {
+        el.myText.placeholder = 'type here — every keystroke is sent live…';
+        el.myText.focus();
+      }
+
+      ghostSyncIfCreator();
+
+      if (state.torMode) {
+        markTorPeerAlive();
+        startTorPresence();
+        state.safetyEnabled = state.torSafetyRequested !== false;
+        await showSafetyCode();
+      }
+
+      log('forward-secure epoch 1 established — per-message ratchet active.', 'ok');
+
+      // Valid epoch-1 payloads can arrive during the final ready/ack crossing.
+      // Replay them only after the local UI/session policy is fully verified.
+      const queued = Array.isArray(state.preverifiedMessages)
+        ? state.preverifiedMessages.splice(0, 64)
+        : [];
+      for (const item of queued) {
+        await handleMessage(item.message, item.header);
+      }
+
+      return true;
     }
 
     function applyEraseSeconds(seconds) {
@@ -3253,12 +3819,9 @@ footer {
         return;
       }
 
-      if (roomPolicyActive && state.focusGuardNotifyRequired && isFocusGuardNotifyToggle(target) && notifyBox && !notifyBox.checked) {
-        state.focusGuardNotify = true;
-        syncFocusGuardUi();
-        log('Focus Guard alert is required by this room and cannot be turned off during this session.', 'warn');
-        return;
-      }
+      // Alerting the other side is deliberately local and optional. A room may
+      // require the black privacy shield, but it must not force a participant to
+      // disclose local focus/minimize activity.
 
       if (isFocusGuardMainToggle(target) || !target) {
         state.focusGuardOn = !!(onBox && onBox.checked);
@@ -3270,10 +3833,6 @@ footer {
 
       if (isFocusGuardNotifyToggle(target) || isFocusGuardMainToggle(target) || !target) {
         state.focusGuardNotify = !!(state.focusGuardOn && notifyBox && notifyBox.checked);
-      }
-
-      if (roomPolicyActive && state.focusGuardNotifyRequired) {
-        state.focusGuardNotify = true;
       }
 
       if (isFocusGuardTextToggle(target) || isFocusGuardMainToggle(target) || !target) {
@@ -3298,19 +3857,24 @@ footer {
         on: !!state.focusGuardOn,
         required: !!(state.focusGuardRequired || state.focusGuardOn),
         notify: !!state.focusGuardNotify,
-        notifyRequired: !!(state.focusGuardNotifyRequired || state.focusGuardNotify),
+        // Kept in the payload for backward-compatible parsing, but never used
+        // as a mandatory room rule. Alerting is a local privacy preference.
+        notifyRequired: false,
         showText: !!state.focusGuardShowText
       };
     }
 
     function applyFocusGuardPayload(focus) {
       const required = !!(focus && (focus.required || focus.on));
-      const notifyRequired = !!(required && focus && (focus.notifyRequired || focus.notify));
 
       state.focusGuardRequired = required;
       state.focusGuardOn = required || !!(focus && focus.on);
-      state.focusGuardNotifyRequired = notifyRequired;
-      state.focusGuardNotify = !!(state.focusGuardOn && focus && focus.notify) || notifyRequired;
+
+      // The creator may choose the initial alert setting, but every participant
+      // can enable or disable it locally during the session. Never convert this
+      // preference into a mandatory room rule, including for older invite data.
+      state.focusGuardNotifyRequired = false;
+      state.focusGuardNotify = !!(state.focusGuardOn && focus && focus.notify);
       state.focusGuardShowText = !(focus && focus.showText === false);
 
       syncFocusGuardUi();
@@ -3328,7 +3892,9 @@ footer {
       const roomPolicyActive = focusGuardRoomPolicyActive();
 
       if (roomPolicyActive && state.focusGuardRequired) state.focusGuardOn = true;
-      if (roomPolicyActive && state.focusGuardNotifyRequired) state.focusGuardNotify = true;
+      // Auxiliary options are always local and editable, even when the main
+      // Focus Guard shield is mandatory for the room.
+      state.focusGuardNotifyRequired = false;
       if (!state.focusGuardOn) state.focusGuardNotify = false;
 
       setFocusGuardBox(el.useFocusGuard, state.focusGuardOn);
@@ -3342,8 +3908,11 @@ footer {
       // Chat controls become locked only when a real room/session policy is active.
       setFocusGuardDisabled(el.useFocusGuard, roomPolicyActive && state.focusGuardRequired);
       setFocusGuardDisabled(el.useFocusGuardChat, roomPolicyActive && state.focusGuardRequired);
-      setFocusGuardDisabled(el.useFocusGuardNotify, roomPolicyActive && state.focusGuardNotifyRequired);
-      setFocusGuardDisabled(el.useFocusGuardNotifyChat, roomPolicyActive && state.focusGuardNotifyRequired);
+
+      // These are local preferences, not room-policy controls. Keeping them
+      // enabled also prevents a disabled checkbox from looking like a UI bug.
+      setFocusGuardDisabled(el.useFocusGuardNotify, false);
+      setFocusGuardDisabled(el.useFocusGuardNotifyChat, false);
       setFocusGuardDisabled(el.useFocusGuardText, false);
       setFocusGuardDisabled(el.useFocusGuardTextChat, false);
 
@@ -3411,16 +3980,8 @@ footer {
       });
     }
 
-    function hideFocusGuard(options) {
-      const skipFocus = !!(options && options.skipFocus);
-      const controlGraceMs = Math.max(0, Number(options && options.controlGraceMs) || 0);
-
+    function hideFocusGuard() {
       state.focusGuardLocked = false;
-
-      if (controlGraceMs > 0) {
-        state.focusGuardControlGraceUntil = Date.now() + Math.min(controlGraceMs, 15000);
-      }
-
       if (!el.focusGuardOverlay) return;
 
       el.focusGuardOverlay.classList.remove('on');
@@ -3428,8 +3989,6 @@ footer {
       el.focusGuardOverlay.style.visibility = '';
       el.focusGuardOverlay.style.opacity = '';
       el.focusGuardOverlay.style.pointerEvents = '';
-
-      if (skipFocus) return;
 
       requestAnimationFrame(() => {
         if (focusGuardReady() && el.myText && !el.myText.disabled) {
@@ -3516,7 +4075,7 @@ footer {
     }
 
     function sendFocusGuardAlert(reason, options) {
-      if (!state.focusGuardNotify || !state.connected || !state.peerVerified || !state.keyBytes) return false;
+      if (!state.focusGuardNotify || !state.connected || !state.peerVerified || !hasActiveTransportKeyMaterial()) return false;
 
       const urgent = !!(options && options.urgent);
       const cleanReason = String(reason || 'focus-guard').slice(0, 48);
@@ -3611,80 +4170,56 @@ footer {
       });
     }
 
-    function focusGuardControlGraceActive() {
-      return Date.now() < (Number(state.focusGuardControlGraceUntil) || 0);
-    }
 
     function focusGuardControlTarget(target) {
-      if (!target || !target.closest) return null;
+      if (!target || typeof target.closest !== 'function') return null;
 
-      return target.closest(
-        '#viewChat button, #viewChat input, #viewChat select, #viewChat label, #viewChat summary, #viewChat details'
-      );
+      try {
+        return target.closest(
+          '#viewChat button, #viewChat input, #viewChat select, #viewChat label, #viewChat summary, #viewChat details'
+        );
+      } catch (_) {
+        return null;
+      }
     }
 
-    function focusGuardOverlayUnlock(event) {
-      if (event) {
-        try { event.preventDefault(); } catch (_) {}
-        try { event.stopPropagation(); } catch (_) {}
-        try {
-          if (event.stopImmediatePropagation) event.stopImmediatePropagation();
-        } catch (_) {}
+    function focusGuardEventPath(event) {
+      if (!event) return [];
+
+      try {
+        if (typeof event.composedPath === 'function') {
+          const path = event.composedPath();
+          if (Array.isArray(path) && path.length) return path;
+        }
+      } catch (_) {}
+
+      const path = [];
+      let node = event.target || null;
+
+      while (node) {
+        path.push(node);
+        node = node.parentNode || node.host || null;
       }
 
-      const now = Date.now();
-      if (now - (Number(state.focusGuardOverlayTapAt) || 0) < 250) return;
-      state.focusGuardOverlayTapAt = now;
-
-      const clientX = event && typeof event.clientX === 'number' ? event.clientX : null;
-      const clientY = event && typeof event.clientY === 'number' ? event.clientY : null;
-
-      hideFocusGuard({
-        skipFocus: true,
-        controlGraceMs: 8000
-      });
-
-      // Professional no-button behavior:
-      // The black screen is only a shield. A tap on it unlocks the UI and gives
-      // a short safe window so the user can use Panic, End, Clear, or Focus Guard
-      // checkboxes without immediately falling back into Focus Guard.
-      // If the tap was exactly over a safe control, replay that click once.
-      if (clientX === null || clientY === null) return;
-
-      setTimeout(() => {
-        let target = null;
-        try {
-          target = document.elementFromPoint(clientX, clientY);
-        } catch (_) {
-          target = null;
-        }
-
-        const control = focusGuardControlTarget(target);
-        if (!control || control.disabled) return;
-
-        try {
-          if (control.tagName === 'LABEL') {
-            control.click();
-          } else if (control.tagName === 'INPUT' || control.tagName === 'BUTTON' || control.tagName === 'SELECT') {
-            control.click();
-          } else {
-            const clickable = control.querySelector && control.querySelector('button, input, select');
-            if (clickable && !clickable.disabled) clickable.click();
-          }
-        } catch (_) {}
-      }, 0);
+      return path;
     }
 
-    function focusGuardAllowedTarget(target) {
-      if (!target) return false;
-      if (target === el.focusGuardOverlay) return true;
-      if (target === el.myText) return true;
-      if (el.myText && el.myText.contains && el.myText.contains(target)) return true;
+    function focusGuardAllowedEvent(event) {
+      const path = focusGuardEventPath(event);
 
-      // Chat controls must remain usable while Focus Guard is active.
-      // Without this safe area, trying to uncheck Focus Guard or pressing Panic/End
-      // would itself trigger the black screen before the control can receive the click.
-      if (focusGuardControlTarget(target)) return true;
+      for (const node of path) {
+        if (!node) continue;
+        if (node === el.focusGuardOverlay) return true;
+        if (node === el.myText) return true;
+        if (el.myText && el.myText.contains && el.myText.contains(node)) return true;
+
+        // Use the complete event path instead of only event.target. This is more
+        // reliable for labels, nested spans, touch events, and Firefox/Tor Browser.
+        if (focusGuardControlTarget(node)) {
+          state.focusGuardSafeControlUntil = Date.now() + 750;
+          return true;
+        }
+      }
 
       return false;
     }
@@ -3696,25 +4231,21 @@ footer {
       if (event && event.type === 'touchstart' && window.PointerEvent) return;
 
       if (el.focusGuardOverlay && event.target === el.focusGuardOverlay) {
-        focusGuardOverlayUnlock(event);
+        try { event.preventDefault(); } catch (_) {}
+        try { event.stopPropagation(); } catch (_) {}
+        hideFocusGuard();
         return;
       }
 
       if (!focusGuardReady()) return;
-
-      // After the black screen is dismissed, give the user a short professional
-      // control window for checkboxes/Panic/End/Clear. This prevents the annoying
-      // loop where trying to configure Focus Guard instantly triggers Focus Guard again.
-      if (focusGuardControlGraceActive()) return;
-
-      if (focusGuardAllowedTarget(event.target)) return;
+      if (focusGuardAllowedEvent(event)) return;
 
       try { event.preventDefault(); } catch (_) {}
       try { event.stopPropagation(); } catch (_) {}
       showFocusGuard('outside-typing-area');
     }
 
-    function focusGuardPageEvent(reason) {
+    function focusGuardApplyPageEvent(reason) {
       if (!state.focusGuardOn || state.keyguardOn) return;
 
       // Send the alert before changing the overlay. On minimize/tab-hide, the browser
@@ -3724,6 +4255,32 @@ footer {
       }
 
       showFocusGuard(reason);
+    }
+
+    function focusGuardPageEvent(reason) {
+      if (!state.focusGuardOn || state.keyguardOn) return;
+
+      // Some Firefox/Tor Browser builds can emit a transient window-blur while a
+      // native checkbox is receiving focus. Do not black out the page immediately
+      // after a verified chat-control interaction. Recheck actual window focus after
+      // a very short delay; a real minimize/tab switch still activates the shield.
+      if (reason === 'window-blur' && Date.now() <= state.focusGuardSafeControlUntil) {
+        clearTimeout(state.focusGuardDeferredBlurTimer);
+        state.focusGuardDeferredBlurTimer = setTimeout(() => {
+          state.focusGuardDeferredBlurTimer = null;
+
+          if (!state.focusGuardOn || state.keyguardOn) return;
+
+          try {
+            if (typeof document.hasFocus === 'function' && document.hasFocus()) return;
+          } catch (_) {}
+
+          focusGuardApplyPageEvent(reason);
+        }, 160);
+        return;
+      }
+
+      focusGuardApplyPageEvent(reason);
     }
 
       /* =========================================================
@@ -4089,7 +4646,10 @@ footer {
       function sendTypingNow() {
       if (!state.connected || !state.peerVerified) return;
 
-      const text = el.myText.value.slice(0, MAX_TEXT);
+      let text = el.myText.value.slice(0, MAX_TEXT);
+      if (state.torMode) {
+        text = truncateUtf8(text, TOR_MAX_TEXT_UTF8_BYTES);
+      }
       if (el.myText.value !== text) el.myText.value = text;
 
       // Ghost Mode: if it is not my turn, do not send.
@@ -4181,7 +4741,7 @@ footer {
     }
 
     async function notifyPeerEnd() {
-      if (state.torMode && state.keyBytes) {
+      if (state.torMode && hasActiveTransportKeyMaterial()) {
         try {
           await send({ type: 'end' });
           await sleep(180);
@@ -4204,8 +4764,17 @@ footer {
       } catch (_) {}
     }
 
+    function zeroBytes(arr) {
+      if (arr && typeof arr.fill === 'function') {
+        try { arr.fill(0); } catch (_) {}
+      }
+    }
+
     async function endSession(notify, silent) {
       state.localClosing = true;
+      state.cryptoGeneration = (Number(state.cryptoGeneration) || 0) + 1;
+      state.ratchetInitPromise = null;
+      state.ratchetMixQueue = Promise.resolve();
       if (notify) await notifyPeerEnd();
       clearInterval(state.pollTimer);
       clearTimeout(state.myClearTimer);
@@ -4247,6 +4816,21 @@ footer {
       state.idleEndTimer = null;
       state.helloTimer = null;
       state.helloRetryTimer = null;
+      state.helloSendBusy = false;
+      state.transportSendQueue = Promise.resolve();
+      state.transportRecvQueue = Promise.resolve();
+      state.setupSendQueue = Promise.resolve();
+      state.ratchetInitPromise = null;
+      state.ratchetMixQueue = Promise.resolve();
+      state.peerCodeVerified = false;
+      state.epoch1ReadySent = false;
+      state.epoch1RemoteReady = false;
+      state.epoch1AckSent = false;
+      state.epoch1RemoteAck = false;
+      state.epoch1Transcript = '';
+      state.preverifiedMessages = [];
+      state.lastProtocolErrorAt = 0;
+      state.lastProtocolErrorText = '';
       state.lifetimeTick = null;
       state.lifetimeMinutes = 0;
       state.lifetimeDeadline = 0;
@@ -4263,6 +4847,7 @@ footer {
       state.torPeerLastSeenAt = 0;
       state.torPeerLost = false;
       state.torPendingJoin = false;
+      state.torSafetyRequested = true;
       state.manualMode = false;
       state.manualInvitePending = false;
       state.manualPendingOfferBlob = '';
@@ -4282,12 +4867,24 @@ footer {
       state.theirSeq = 0;
       state.room = '';
       state.token = '';
+      zeroBytes(state.secretBytes);
+      zeroBytes(state.keyBytes);
+      zeroBytes(state.setupKeyBytes);
+      zeroBytes(state.safetyKeyBytes);
+      zeroBytes(state.ratchetRootBytes);
+      zeroBytes(state.transportKeyBytes);
+      if (state.ratchet) {
+        zeroBytes(state.ratchet.rootKey);
+        zeroBytes(state.ratchet.sendChain);
+        zeroBytes(state.ratchet.recvChain);
+      }
       state.secretBytes = null;
       state.keyBytes = null;
       state.setupKeyBytes = null;
       state.safetyKeyBytes = null;
       state.ratchetRootBytes = null;
       state.transportKeyBytes = null;
+      state.transportEpoch = 0;
       state.transportSendSeq = 0;
       state.transportRecvSeq = 0;
       state.ratchet = null;
@@ -4296,11 +4893,12 @@ footer {
       state.focusGuardRequired = false;
       state.focusGuardNotifyRequired = false;
       state.focusGuardLocked = false;
-      state.focusGuardControlGraceUntil = 0;
-      state.focusGuardOverlayTapAt = 0;
       state.focusGuardLastAlertAt = 0;
       state.focusGuardLastAlertReason = '';
       state.focusGuardSeenAlertIds = {};
+      state.focusGuardSafeControlUntil = 0;
+      clearTimeout(state.focusGuardDeferredBlurTimer);
+      state.focusGuardDeferredBlurTimer = null;
       hideFocusGuard();
       syncFocusGuardUi();
       el.myText.disabled = false;
@@ -4456,15 +5054,86 @@ footer {
     }
 
     async function deriveSessionKeys() {
-      if (!state.keyBytes) throw new Error('missing master key.');
-      const salt = await sha256Bytes('wisp-session-salt-v3|' + state.room + '|' + state.token + '|' + bytesToBase64Url(state.secretBytes || new Uint8Array()));
-      state.setupKeyBytes = await hkdfBytes(state.keyBytes, 'setup-encryption-key', 32, salt);
-      state.safetyKeyBytes = await hkdfBytes(state.keyBytes, 'safety-code-key', 32, salt);
-      state.transportKeyBytes = await hkdfBytes(state.keyBytes, 'transport-message-key', 32, salt);
-      state.ratchetRootBytes = await hkdfBytes(state.keyBytes, 'transport-ratchet-root', 32, salt);
-      state.transportSendSeq = 0;
-      state.transportRecvSeq = 0;
-      state.ratchet = null;
+      if (!(state.keyBytes instanceof Uint8Array) || state.keyBytes.length !== 32) {
+        throw new Error('missing or invalid master key.');
+      }
+
+      const generation = (Number(state.cryptoGeneration) || 0) + 1;
+      state.cryptoGeneration = generation;
+      state.ratchetInitPromise = null;
+      state.ratchetMixQueue = Promise.resolve();
+
+      const room = String(state.room || '');
+      const token = String(state.token || '');
+      const keyMaterial = new Uint8Array(state.keyBytes);
+      const secretMaterial = state.secretBytes instanceof Uint8Array
+        ? new Uint8Array(state.secretBytes)
+        : new Uint8Array();
+
+      let salt = null;
+      let setupKey = null;
+      let safetyKey = null;
+      let epoch0Key = null;
+      let ratchetRoot = null;
+
+      try {
+        salt = await sha256Bytes(
+          'wisp-session-salt-v4|' + room + '|' + token + '|' + bytesToBase64Url(secretMaterial)
+        );
+        setupKey = await hkdfBytes(keyMaterial, 'setup-encryption-key-v4', 32, salt);
+        safetyKey = await hkdfBytes(keyMaterial, 'safety-code-key-v4', 32, salt);
+        epoch0Key = await hkdfBytes(keyMaterial, 'transport-epoch0-key-v4', 32, salt);
+        ratchetRoot = await hkdfBytes(keyMaterial, 'transport-ratchet-root-v4', 32, salt);
+
+        if (
+          generation !== state.cryptoGeneration ||
+          room !== String(state.room || '') ||
+          token !== String(state.token || '')
+        ) {
+          throw new Error('session changed while deriving cryptographic keys.');
+        }
+
+        zeroBytes(state.setupKeyBytes);
+        zeroBytes(state.safetyKeyBytes);
+        zeroBytes(state.transportKeyBytes);
+        zeroBytes(state.ratchetRootBytes);
+        if (state.ratchet) {
+          zeroBytes(state.ratchet.rootKey);
+          zeroBytes(state.ratchet.sendChain);
+          zeroBytes(state.ratchet.recvChain);
+        }
+
+        state.setupKeyBytes = setupKey;
+        state.safetyKeyBytes = safetyKey;
+        state.transportKeyBytes = epoch0Key;
+        state.ratchetRootBytes = ratchetRoot;
+        setupKey = safetyKey = epoch0Key = ratchetRoot = null;
+
+        state.transportEpoch = 0;
+        state.transportSendSeq = 0;
+        state.transportRecvSeq = 0;
+        state.transportSendQueue = Promise.resolve();
+        state.transportRecvQueue = Promise.resolve();
+        state.setupSendQueue = Promise.resolve();
+        state.peerCodeVerified = false;
+        state.epoch1ReadySent = false;
+        state.epoch1RemoteReady = false;
+        state.epoch1AckSent = false;
+        state.epoch1RemoteAck = false;
+        state.epoch1Transcript = '';
+        state.preverifiedMessages = [];
+        state.ratchet = null;
+      } catch (err) {
+        zeroBytes(setupKey);
+        zeroBytes(safetyKey);
+        zeroBytes(epoch0Key);
+        zeroBytes(ratchetRoot);
+        throw err;
+      } finally {
+        zeroBytes(salt);
+        zeroBytes(keyMaterial);
+        zeroBytes(secretMaterial);
+      }
     }
 
     function getRatchetDirection() {
@@ -4477,37 +5146,92 @@ footer {
     }
 
     async function initRatchet() {
-      if (state.ratchet && state.ratchet.ready) return;
-      if (!state.ratchetRootBytes) await deriveSessionKeys();
+      if (state.ratchet && state.ratchet.ready) return state.ratchet;
+      if (state.ratchetInitPromise) return state.ratchetInitPromise;
 
+      if (!(state.ratchetRootBytes instanceof Uint8Array) || state.ratchetRootBytes.length !== 32) {
+        throw new Error('ratchet root is unavailable for this session.');
+      }
+
+      const generation = Number(state.cryptoGeneration) || 0;
+      const room = String(state.room || '');
+      const token = String(state.token || '');
       const dir = getRatchetDirection();
-      const keyPair = await crypto.subtle.generateKey(
-        { name: 'ECDH', namedCurve: 'P-256' },
-        false,
-        ['deriveBits']
-      );
-      const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
-      const salt = await sha256Bytes('wisp-ratchet-chain-salt-v3|' + state.room + '|' + state.token);
+      const rootSeed = new Uint8Array(state.ratchetRootBytes);
 
-      state.ratchet = {
-        ready: true,
-        rootKey: state.ratchetRootBytes,
-        localKeyPair: keyPair,
-        localPublicJwk: {
-          kty: 'EC',
-          crv: 'P-256',
-          x: publicJwk.x,
-          y: publicJwk.y
-        },
-        remotePublicText: '',
-        dhMixed: false,
-        sendDirection: dir.send,
-        recvDirection: dir.recv,
-        sendChain: await hkdfBytes(state.ratchetRootBytes, 'chain|' + dir.send, 32, salt),
-        recvChain: await hkdfBytes(state.ratchetRootBytes, 'chain|' + dir.recv, 32, salt),
-        sendSeq: 0,
-        recvSeq: 0
-      };
+      const initPromise = (async () => {
+        let salt = null;
+        let sendChain = null;
+        let recvChain = null;
+
+        try {
+          const keyPair = await crypto.subtle.generateKey(
+            { name: 'ECDH', namedCurve: 'P-256' },
+            false,
+            ['deriveBits']
+          );
+          const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+          salt = await sha256Bytes('wisp-ratchet-chain-salt-v4|' + room + '|' + token);
+          sendChain = await hkdfBytes(rootSeed, 'chain|' + dir.send, 32, salt);
+          recvChain = await hkdfBytes(rootSeed, 'chain|' + dir.recv, 32, salt);
+
+          if (
+            generation !== state.cryptoGeneration ||
+            room !== String(state.room || '') ||
+            token !== String(state.token || '')
+          ) {
+            throw new Error('session changed while generating the ECDH key pair.');
+          }
+
+          // A second initializer can no longer win this race, but keep this
+          // defensive branch so future refactors still preserve one key pair.
+          if (state.ratchet && state.ratchet.ready) {
+            zeroBytes(rootSeed);
+            zeroBytes(sendChain);
+            zeroBytes(recvChain);
+            return state.ratchet;
+          }
+
+          state.ratchet = {
+            ready: true,
+            generation: generation,
+            rootKey: rootSeed,
+            localKeyPair: keyPair,
+            localPublicJwk: {
+              kty: 'EC',
+              crv: 'P-256',
+              x: publicJwk.x,
+              y: publicJwk.y
+            },
+            remotePublicText: '',
+            dhMixed: false,
+            sendDirection: dir.send,
+            recvDirection: dir.recv,
+            sendChain: sendChain,
+            recvChain: recvChain,
+            sendSeq: 0,
+            recvSeq: 0
+          };
+          sendChain = recvChain = null;
+          return state.ratchet;
+        } catch (err) {
+          zeroBytes(rootSeed);
+          zeroBytes(sendChain);
+          zeroBytes(recvChain);
+          throw err;
+        } finally {
+          zeroBytes(salt);
+        }
+      })();
+
+      state.ratchetInitPromise = initPromise;
+      try {
+        return await initPromise;
+      } finally {
+        if (state.ratchetInitPromise === initPromise) {
+          state.ratchetInitPromise = null;
+        }
+      }
     }
 
     async function getRatchetPublicJwk() {
@@ -4516,42 +5240,108 @@ footer {
     }
 
     async function mixRatchetRemotePublic(remoteJwk) {
-      if (!remoteJwk || !remoteJwk.x || !remoteJwk.y) return;
-      await initRatchet();
+      const task = Promise.resolve(state.ratchetMixQueue)
+        .catch(() => undefined)
+        .then(() => mixRatchetRemotePublicNow(remoteJwk));
+
+      state.ratchetMixQueue = task.catch(() => undefined);
+      return task;
+    }
+
+    async function mixRatchetRemotePublicNow(remoteJwk) {
+      if (!remoteJwk || typeof remoteJwk.x !== 'string' || typeof remoteJwk.y !== 'string') {
+        throw new Error('peer handshake is missing a valid ECDH public key.');
+      }
+      if (remoteJwk.x.length > 128 || remoteJwk.y.length > 128) {
+        throw new Error('peer ECDH public key is invalid.');
+      }
+
+      const generation = Number(state.cryptoGeneration) || 0;
+      const ratchet = await initRatchet();
+      if (generation !== state.cryptoGeneration || ratchet !== state.ratchet) {
+        throw new Error('stale ECDH operation was cancelled.');
+      }
 
       const remoteText = canonicalRatchetPublic(remoteJwk);
-      if (!remoteText || remoteText === state.ratchet.remotePublicText) return;
+      if (!remoteText) throw new Error('peer ECDH public key is invalid.');
 
-      const remoteKey = await crypto.subtle.importKey(
-        'jwk',
-        { kty: 'EC', crv: 'P-256', x: String(remoteJwk.x), y: String(remoteJwk.y), ext: true },
-        { name: 'ECDH', namedCurve: 'P-256' },
-        false,
-        []
-      );
+      if (ratchet.remotePublicText) {
+        if (remoteText === ratchet.remotePublicText) return ratchet;
+        throw new Error('a second peer ECDH identity was received for this one-person room. create a new room and use the invite only once.');
+      }
 
-      const shared = new Uint8Array(await crypto.subtle.deriveBits(
-        { name: 'ECDH', public: remoteKey },
-        state.ratchet.localKeyPair.privateKey,
-        256
-      ));
+      let shared = null;
+      let salt = null;
+      let newRoot = null;
+      let newSendChain = null;
+      let newRecvChain = null;
 
-      const orderedPubs = [canonicalRatchetPublic(state.ratchet.localPublicJwk), remoteText].sort().join('|');
-      const newRoot = await hkdfBytes(shared, 'dh-ratchet-root|' + orderedPubs, 32, state.ratchet.rootKey);
-      const salt = await sha256Bytes('wisp-dh-chain-salt-v3|' + orderedPubs);
+      try {
+        const remoteKey = await crypto.subtle.importKey(
+          'jwk',
+          { kty: 'EC', crv: 'P-256', x: String(remoteJwk.x), y: String(remoteJwk.y), ext: true },
+          { name: 'ECDH', namedCurve: 'P-256' },
+          false,
+          []
+        );
 
-      state.ratchet.rootKey = newRoot;
-      state.ratchet.sendChain = await hkdfBytes(newRoot, 'chain|' + state.ratchet.sendDirection, 32, salt);
-      state.ratchet.recvChain = await hkdfBytes(newRoot, 'chain|' + state.ratchet.recvDirection, 32, salt);
-      state.ratchet.sendSeq = 0;
-      state.ratchet.recvSeq = 0;
-      state.ratchet.remotePublicText = remoteText;
-      state.ratchet.dhMixed = true;
+        shared = new Uint8Array(await crypto.subtle.deriveBits(
+          { name: 'ECDH', public: remoteKey },
+          ratchet.localKeyPair.privateKey,
+          256
+        ));
+
+        const orderedPubs = [canonicalRatchetPublic(ratchet.localPublicJwk), remoteText].sort().join('|');
+        newRoot = await hkdfBytes(shared, 'dh-ratchet-root-v4|' + orderedPubs, 32, ratchet.rootKey);
+        salt = await sha256Bytes('wisp-dh-chain-salt-v4|' + orderedPubs);
+        newSendChain = await hkdfBytes(newRoot, 'chain|' + ratchet.sendDirection, 32, salt);
+        newRecvChain = await hkdfBytes(newRoot, 'chain|' + ratchet.recvDirection, 32, salt);
+
+        if (
+          generation !== state.cryptoGeneration ||
+          ratchet !== state.ratchet ||
+          ratchet.generation !== generation
+        ) {
+          throw new Error('session changed while completing ECDH.');
+        }
+
+        if (ratchet.remotePublicText && ratchet.remotePublicText !== remoteText) {
+          throw new Error('peer ECDH identity changed during the secure handshake.');
+        }
+
+        const oldRoot = ratchet.rootKey;
+        const oldSendChain = ratchet.sendChain;
+        const oldRecvChain = ratchet.recvChain;
+
+        ratchet.rootKey = newRoot;
+        ratchet.sendChain = newSendChain;
+        ratchet.recvChain = newRecvChain;
+        ratchet.sendSeq = 0;
+        ratchet.recvSeq = 0;
+        ratchet.remotePublicText = remoteText;
+        ratchet.dhMixed = true;
+        state.epoch1Transcript = '';
+
+        newRoot = newSendChain = newRecvChain = null;
+        zeroBytes(oldRoot);
+        zeroBytes(oldSendChain);
+        zeroBytes(oldRecvChain);
+        return ratchet;
+      } finally {
+        zeroBytes(shared);
+        zeroBytes(salt);
+        zeroBytes(newRoot);
+        zeroBytes(newSendChain);
+        zeroBytes(newRecvChain);
+      }
     }
 
     async function ratchetStep(chainKey, purpose) {
-      const next = await hmacSha256(chainKey, 'wisp-ratchet-chain-next|' + purpose);
-      const msg = await hmacSha256(chainKey, 'wisp-ratchet-message-key|' + purpose);
+      if (!(chainKey instanceof Uint8Array) || chainKey.length !== 32) {
+        throw new Error('ratchet chain key is invalid.');
+      }
+      const next = await hmacSha256(chainKey, 'wisp-ratchet-chain-next-v4|' + purpose);
+      const msg = await hmacSha256(chainKey, 'wisp-ratchet-message-key-v4|' + purpose);
       return { nextChain: next, messageKey: msg };
     }
 
@@ -4569,61 +5359,142 @@ footer {
     }
 
     async function encryptTransportPayload(payload) {
-      if (!state.transportKeyBytes) await deriveSessionKeys();
-
-      state.transportSendSeq = (Number(state.transportSendSeq) || 0) + 1;
-
       const dir = getRatchetDirection();
-      const header = {
-        v: 1,
-        d: dir.send,
-        n: state.transportSendSeq
-      };
-
-      const headerB64 = bytesToBase64Url(utf8(JSON.stringify(header)));
       const data = utf8(JSON.stringify(payload));
-      const encrypted = await aesGcmEncryptBytes(state.transportKeyBytes, data, utf8(headerB64));
 
-      // Keep the r1 envelope for compatibility with existing Code.gs validation,
-      // but use a stable HKDF-separated transport key instead of the fragile
-      // browser-to-browser ratchet. This fixes password/Ghost/manual delivery.
-      return 'r1.' + headerB64 + '.' + bytesToBase64Url(encrypted.iv) + '.' + bytesToBase64Url(encrypted.ciphertext);
-    }
+      if (state.transportEpoch === 1) {
+        if (!state.ratchet || !state.ratchet.dhMixed || !state.ratchet.sendChain) {
+          throw new Error('forward-secure send ratchet is not ready.');
+        }
 
-    async function decryptTransportPayload(blob) {
-      const raw = String(blob || '');
+        const seq = (Number(state.ratchet.sendSeq) || 0) + 1;
+        const header = { v: 2, e: 1, d: dir.send, n: seq };
+        const headerB64 = bytesToBase64Url(utf8(JSON.stringify(header)));
+        const purpose = 'epoch1|' + dir.send + '|' + seq;
+        const currentChain = state.ratchet.sendChain;
+        const step = await ratchetStep(currentChain, purpose);
 
-      // Setup/control hello uses g1 and the setup key. Normal chat/control uses r1.
-      if (!raw.startsWith('r1.')) {
-        const key = state.setupKeyBytes || state.keyBytes;
-        return { payload: await decryptPayload(key, raw), header: null };
+        try {
+          const encrypted = await aesGcmEncryptBytes(step.messageKey, data, utf8(headerB64));
+          state.ratchet.sendChain = step.nextChain;
+          state.ratchet.sendSeq = seq;
+          zeroBytes(currentChain);
+          zeroBytes(step.messageKey);
+          return 'r2.' + headerB64 + '.' + bytesToBase64Url(encrypted.iv) + '.' + bytesToBase64Url(encrypted.ciphertext);
+        } catch (err) {
+          zeroBytes(step.nextChain);
+          zeroBytes(step.messageKey);
+          throw err;
+        }
       }
 
-      if (!state.transportKeyBytes) await deriveSessionKeys();
+      // Epoch 0 exists only as a short bootstrap transport. User input remains
+      // disabled until epoch 1 is mutually confirmed, but retaining this path
+      // makes the state machine explicit and keeps authenticated control support.
+      if (!state.transportKeyBytes) throw new Error('epoch 0 transport key is unavailable.');
+      state.transportSendSeq = (Number(state.transportSendSeq) || 0) + 1;
+      const header = { v: 2, e: 0, d: dir.send, n: state.transportSendSeq };
+      const headerB64 = bytesToBase64Url(utf8(JSON.stringify(header)));
+      const encrypted = await aesGcmEncryptBytes(state.transportKeyBytes, data, utf8(headerB64));
+      return 'r2.' + headerB64 + '.' + bytesToBase64Url(encrypted.iv) + '.' + bytesToBase64Url(encrypted.ciphertext);
+    }
+
+    async function decryptTransportPayloadNow(blob) {
+      const raw = String(blob || '');
+
+      // Setup handshake/control remains on g1 and the setup key.
+      if (!raw.startsWith('r2.')) {
+        const key = state.setupKeyBytes || state.keyBytes;
+        if (!key) throw new Error('setup key is unavailable.');
+        return { payload: await decryptPayload(key, raw), header: null };
+      }
 
       const parts = raw.split('.');
       if (parts.length !== 4) throw new Error('invalid transport payload.');
 
       const header = JSON.parse(new TextDecoder().decode(base64UrlToBytes(parts[1])));
       const dir = getRatchetDirection();
-
-      if (!header || header.v !== 1 || header.d !== dir.recv) {
-        throw new Error('wrong transport direction.');
+      if (!header || header.v !== 2 || header.d !== dir.recv) {
+        throw new Error('wrong transport direction or protocol version.');
       }
 
       const seq = Number(header.n);
-      if (!Number.isSafeInteger(seq) || seq <= state.transportRecvSeq || seq - state.transportRecvSeq > 512) {
-        throw new Error('invalid transport sequence.');
-      }
+      if (!Number.isSafeInteger(seq) || seq < 1) throw new Error('invalid transport sequence.');
 
       const iv = base64UrlToBytes(parts[2]);
       const ciphertext = base64UrlToBytes(parts[3]);
+
+      if (Number(header.e) === 1) {
+        if (!state.ratchet || !state.ratchet.dhMixed || !state.ratchet.recvChain) {
+          throw new Error('forward-secure receive ratchet is not ready.');
+        }
+
+        const expectedSeq = (Number(state.ratchet.recvSeq) || 0) + 1;
+        if (seq < expectedSeq) throw new Error('replayed ratchet message.');
+        if (seq - expectedSeq > MAX_RATCHET_SKIP) throw new Error('ratchet sequence gap is too large.');
+
+        // A transport send can fail after local encryption has advanced the send
+        // chain. Derive across a small authenticated gap, but commit none of the
+        // provisional chain state unless the target ciphertext authenticates.
+        const currentChain = state.ratchet.recvChain;
+        let workingChain = new Uint8Array(currentChain);
+        let targetMessageKey = null;
+        let targetNextChain = null;
+
+        try {
+          for (let currentSeq = expectedSeq; currentSeq <= seq; currentSeq += 1) {
+            const purpose = 'epoch1|' + dir.recv + '|' + currentSeq;
+            const step = await ratchetStep(workingChain, purpose);
+            zeroBytes(workingChain);
+
+            if (currentSeq === seq) {
+              targetMessageKey = step.messageKey;
+              targetNextChain = step.nextChain;
+            } else {
+              // Permanently discard skipped message keys. This preserves forward
+              // secrecy and treats a missing ordered packet as irrecoverable.
+              zeroBytes(step.messageKey);
+              workingChain = step.nextChain;
+            }
+          }
+
+          const plain = await aesGcmDecryptBytes(targetMessageKey, iv, ciphertext, utf8(parts[1]));
+          const payload = JSON.parse(new TextDecoder().decode(plain));
+          state.ratchet.recvChain = targetNextChain;
+          state.ratchet.recvSeq = seq;
+          zeroBytes(currentChain);
+          zeroBytes(targetMessageKey);
+          zeroBytes(plain);
+          return { payload, header };
+        } catch (err) {
+          zeroBytes(workingChain);
+          zeroBytes(targetNextChain);
+          zeroBytes(targetMessageKey);
+          throw err;
+        }
+      }
+
+      if (Number(header.e) !== 0) throw new Error('unsupported transport key epoch.');
+      if (state.transportEpoch === 1) throw new Error('late epoch 0 payload rejected.');
+      if (!state.transportKeyBytes) throw new Error('epoch 0 transport key is unavailable.');
+      if (seq <= state.transportRecvSeq || seq - state.transportRecvSeq > 512) {
+        throw new Error('invalid epoch 0 transport sequence.');
+      }
+
       const plain = await aesGcmDecryptBytes(state.transportKeyBytes, iv, ciphertext, utf8(parts[1]));
       const payload = JSON.parse(new TextDecoder().decode(plain));
-
       state.transportRecvSeq = seq;
-
+      zeroBytes(plain);
       return { payload, header };
+    }
+
+    async function decryptTransportPayload(blob) {
+      const task = Promise.resolve(state.transportRecvQueue)
+        .catch(() => undefined)
+        .then(() => decryptTransportPayloadNow(blob));
+
+      state.transportRecvQueue = task.catch(() => undefined);
+      return task;
     }
 
     async function encryptSetupPayload(payload) {
@@ -4638,7 +5509,7 @@ footer {
 
     async function deriveKeyBytes(secretBytes, password) {
       // Turns (link secret + password) into the real encryption key.
-      // PBKDF2 with 210,000 rounds makes guessing passwords very slow,
+      // PBKDF2 with 600,000 rounds makes guessing passwords very slow,
       // and the random link secret works as a unique salt per room.
       const material = await crypto.subtle.importKey(
         'raw',
@@ -4648,7 +5519,7 @@ footer {
         ['deriveBits']
       );
       const bits = await crypto.subtle.deriveBits(
-        { name: 'PBKDF2', salt: secretBytes, iterations: 210000, hash: 'SHA-256' },
+        { name: 'PBKDF2', salt: secretBytes, iterations: 600000, hash: 'SHA-256' },
         material,
         256
       );
@@ -4991,7 +5862,7 @@ footer {
     });
     function bestEffortCloseOnExit() {
       try {
-        if (state.torMode && state.connected && state.keyBytes) {
+        if (state.torMode && state.connected && hasActiveTransportKeyMaterial()) {
           notifyPeerEnd();
         }
       } catch (_) {}
