@@ -3247,29 +3247,6 @@ footer {
       }
     }
 
-    async function sendHello() {
-      if (state.peerVerified) return true;
-      if (state.helloSendBusy) return false;
-
-      state.helloSendBusy = true;
-      try {
-        const fp = await ensureCodeFingerprint();
-        if (!fp || fp === 'unavailable') {
-          throw new Error('local code fingerprint is unavailable.');
-        }
-
-        const dh = await getRatchetPublicJwk();
-        const sent = await sendSetupMessage({ type: 'hello', version: VERSION, fp: fp, dh: dh });
-        if (!sent) throw new Error('hello was not queued.');
-        return true;
-      } catch (err) {
-        reportProtocolError('secure hello could not be sent', err, 'warn');
-        return false;
-      } finally {
-        state.helloSendBusy = false;
-      }
-    }
-
     function stopHelloRetry() {
       clearInterval(state.helloRetryTimer);
       state.helloRetryTimer = null;
@@ -3341,28 +3318,6 @@ footer {
         throw new Error('epoch negotiation proof is invalid.');
       }
       return true;
-    }
-
-    async function sendEpoch1Ready() {
-      if (state.peerVerified) return true;
-      if (!state.peerCodeVerified || !state.ratchet || !state.ratchet.dhMixed) return false;
-
-      const fp = await ensureCodeFingerprint();
-      const proof = await makeEpoch1Proof('ready', getRatchetDirection().send);
-      const sent = await sendSetupMessage({ type: 'epochReady', epoch: 1, fp: fp, proof: proof });
-      if (sent) state.epoch1ReadySent = true;
-      return sent;
-    }
-
-    async function sendEpoch1Ack() {
-      if (state.peerVerified) return true;
-      if (!state.peerCodeVerified || !state.epoch1RemoteReady || !state.ratchet || !state.ratchet.dhMixed) return false;
-
-      const fp = await ensureCodeFingerprint();
-      const proof = await makeEpoch1Proof('ack', getRatchetDirection().send);
-      const sent = await sendSetupMessage({ type: 'epochAck', epoch: 1, fp: fp, proof: proof });
-      if (sent) state.epoch1AckSent = true;
-      return sent;
     }
 
     async function sendHandshakeProgress() {
@@ -3509,49 +3464,6 @@ footer {
           'bad'
         );
       }, timeoutMs);
-    }
-
-    async function verifyPeerVersion(message) {
-      const mine = await ensureCodeFingerprint();
-      const theirs = String(message && message.fp || '');
-
-      if (!theirs) throw new Error('peer hello is missing the code fingerprint.');
-      if (!mine || mine === 'unavailable') throw new Error('local code fingerprint is unavailable.');
-      if (Number(message && message.version) !== VERSION) throw new Error('peer protocol version is incompatible.');
-
-      if (theirs !== mine) {
-        stopHelloRetry();
-        await endSession(false);
-        log('session blocked: the other side is running a DIFFERENT version of the code. both must use the exact same deployment.', 'bad');
-        return false;
-      }
-
-      state.peerCodeVerified = true;
-      await sendEpoch1Ready();
-      return true;
-    }
-
-    async function handleEpoch1Ready(message) {
-      if (state.peerVerified) return true;
-      if (!state.peerCodeVerified || !state.ratchet || !state.ratchet.dhMixed) {
-        throw new Error('epochReady arrived before a verified hello.');
-      }
-
-      await verifyEpoch1Proof(message, 'ready');
-      state.epoch1RemoteReady = true;
-      await sendEpoch1Ack();
-      return maybeActivateEpoch1();
-    }
-
-    async function handleEpoch1Ack(message) {
-      if (state.peerVerified) return true;
-      if (!state.peerCodeVerified || !state.ratchet || !state.ratchet.dhMixed) {
-        throw new Error('epochAck arrived before a verified hello.');
-      }
-
-      await verifyEpoch1Proof(message, 'ack');
-      state.epoch1RemoteAck = true;
-      return maybeActivateEpoch1();
     }
 
     async function maybeActivateEpoch1() {
@@ -5007,18 +4919,6 @@ footer {
 
     function utf8(value) {
       return new TextEncoder().encode(String(value || ''));
-    }
-
-    function concatBytes(...parts) {
-      const arrays = parts.map(part => part instanceof Uint8Array ? part : new Uint8Array(part || []));
-      const total = arrays.reduce((sum, arr) => sum + arr.length, 0);
-      const out = new Uint8Array(total);
-      let offset = 0;
-      for (const arr of arrays) {
-        out.set(arr, offset);
-        offset += arr.length;
-      }
-      return out;
     }
 
     async function sha256Bytes(data) {
